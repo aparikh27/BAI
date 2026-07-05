@@ -26,7 +26,18 @@ class YOLODetector(ImageDetector):
         super().__init__("yolo11n.pt")
         self.model = YOLO("yolo11n.pt")
 
-    def detect(self, source, confidence):
+    def process_frame(self, frame, confidence, frame_index):
+        results = self.model(frame, conf=confidence, stream=False, verbose=False)
+        detections = []
+        annotated_frame = frame
+
+        for result in results:
+            annotated_frame = result.plot()
+            detections.extend(self._build_detections(frame_index, result))
+
+        return detections, annotated_frame
+
+    def detect(self, source, confidence, frame_callback=None):
         video_source = self._normalize_source(source)
         cap = cv2.VideoCapture(video_source)
 
@@ -41,22 +52,14 @@ class YOLODetector(ImageDetector):
                     break
 
                 frame_index += 1
-                results = self.model(frame, conf=confidence, stream=False, verbose=False)
+                detections, annotated_frame = self.process_frame(frame, confidence, frame_index)
+                for detection in detections:
+                    yield detection
 
-                annotated_frame = frame
-                for result in results:
-                    annotated_frame = result.plot()
-                    for detection in self._build_detections(frame_index, result):
-                        yield detection
-
-                if annotated_frame is not None:
-                    cv2.imshow("YOLO Detection", annotated_frame)
-
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if annotated_frame is not None and frame_callback is not None:
+                    frame_callback(annotated_frame)
         finally:
             cap.release()
-            cv2.destroyAllWindows()
 
     def _normalize_source(self, source):
         if isinstance(source, (int, float)):

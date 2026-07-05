@@ -29,3 +29,14 @@ async def stopDetect():
         return {"status": "Detection is not running"}
 
     return {"status": "Detection stopped"}
+@detect_router.get('/video-feed')
+def video_feed():
+    def frame_generator():
+        while detector_service.running:
+            frame_bytes = detector_service.get_latest_frame()
+            if frame_bytes:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.03) # Match ~30 FPS
+
+    return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')

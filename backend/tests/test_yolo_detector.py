@@ -23,6 +23,9 @@ class FakeResult:
         self.boxes = [FakeBox()]
         self.names = {0: "person"}
 
+    def plot(self):
+        return [[1, 2, 3]]
+
 
 class YOLODetectorTests(unittest.TestCase):
     def test_build_detections_creates_custom_objects(self):
@@ -34,6 +37,15 @@ class YOLODetectorTests(unittest.TestCase):
         self.assertEqual(detections[0].class_name, "person")
         self.assertEqual(detections[0].frame_index, 2)
         self.assertIn("person", detections[0].verbose())
+
+    def test_process_frame_returns_detections_and_annotated_frame(self):
+        detector = YOLODetector.__new__(YOLODetector)
+        detector.model = type("FakeModel", (), {"__call__": lambda self, frame, conf, stream, verbose: [FakeResult()]})()
+        detections, annotated_frame = detector.process_frame([[1, 2, 3]], confidence=0.5, frame_index=1)
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0].class_name, "person")
+        self.assertIsNotNone(annotated_frame)
 
 
 if __name__ == "__main__":
