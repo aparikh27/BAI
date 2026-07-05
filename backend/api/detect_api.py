@@ -1,6 +1,8 @@
 from backend.features.detect import DetectorService
 from pydantic import BaseModel, Field
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+import time
+from fastapi.responses import StreamingResponse
 
 detect_router = APIRouter()
 detector_service = DetectorService()
@@ -29,14 +31,24 @@ async def stopDetect():
         return {"status": "Detection is not running"}
 
     return {"status": "Detection stopped"}
+
 @detect_router.get('/video-feed')
 def video_feed():
+    """Streams the MJPEG video feed to the frontend"""
+    if not detector_service.running:
+        raise HTTPException(status_code=400, detail="Detection is not running")
+
     def frame_generator():
         while detector_service.running:
             frame_bytes = detector_service.get_latest_frame()
+            
             if frame_bytes:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.03) # Match ~30 FPS
+                
+            time.sleep(0.03)
 
-    return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
+    return StreamingResponse(
+        frame_generator(), 
+        media_type='multipart/x-mixed-replace; boundary=frame'
+    )
