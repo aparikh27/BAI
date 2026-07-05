@@ -1,9 +1,9 @@
-from backend.image_detection.yolo_detector import YOLODetector
+from backend.features.detect import DetectorService
 from pydantic import BaseModel, Field
 from fastapi import APIRouter
 
 detect_router = APIRouter()
-detector = YOLODetector()
+detector_service = DetectorService()
 
 class DetectRequest(BaseModel):
     source: str | int
@@ -11,7 +11,21 @@ class DetectRequest(BaseModel):
 
 @detect_router.post('/detect')
 async def detect(request: DetectRequest):
-    results = detector.detect(source=request.source, confidence=request.confidence)
-    for result in results:
-        print(result.verbose())
-    return {"status": "success", "message": f"Finished processing {request.source}"}
+    started = detector_service.start(
+        source=request.source,
+        confidence=request.confidence,
+    )
+
+    if not started:
+        return {"status": "Detection already running"}
+
+    return {"status": "Detection started"}
+
+@detect_router.post('/stopDetect')
+async def stopDetect():
+    stopped = detector_service.stop()
+
+    if not stopped:
+        return {"status": "Detection is not running"}
+
+    return {"status": "Detection stopped"}
