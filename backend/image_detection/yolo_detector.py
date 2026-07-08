@@ -19,6 +19,10 @@ class Detection:
             f"confidence={self.confidence:.2f} box={self.box} track_id={self.track_id}"
         )
 
+@dataclass
+class FrameDetection:
+    frame_index: int
+    detections: list[Detection]
 
 class YOLODetector(ImageDetector):
     def __init__(self):
@@ -52,8 +56,7 @@ class YOLODetector(ImageDetector):
 
                 frame_index += 1
                 detections, annotated_frame = self.process_frame(frame, confidence, frame_index)
-                for detection in detections:
-                    yield detection
+                yield FrameDetection(frame_index=frame_index, detections=detections)
 
                 if annotated_frame is not None and frame_callback is not None:
                     frame_callback(annotated_frame)
