@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 import time
 from fastapi.responses import StreamingResponse
+from dataclasses import asdict  # <--- Make sure to import this at the top
 
 detect_router = APIRouter()
 detector_service = DetectorService()
@@ -52,3 +53,13 @@ def video_feed():
         frame_generator(), 
         media_type='multipart/x-mixed-replace; boundary=frame'
     )
+
+@detect_router.get('/visible-objects')
+def visible_objects():
+    """Returns the list of currently visible objects in the world memory"""
+    if not detector_service.running:
+        raise HTTPException(status_code=400, detail="Detection is not running")
+
+    visible_objects = detector_service.world.get_visible_objects()
+    
+    return {"visible_objects": [asdict(obj) for obj in visible_objects]}

@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import "./App.css";
 
 function App() {
-  // 1. Add state to track if the camera is running
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isShowingObjects, setIsShowingObjects] = useState<boolean>(false);
+  const [visibleObjectsList, setVisibleObjectsList] = useState<any[]>([]);
+  const pollingRef = useRef<number | null>(null);
+
 
   const detect = async () => {
     console.log("Sending start detect request...");
@@ -52,6 +56,50 @@ function App() {
     }
   };
 
+  const fetchVisibleObjects = async () => {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/api/visible-objects");
+      if (!response.ok) return;
+      const data = await response.json();
+      setVisibleObjectsList(data.visible_objects || []);
+    } catch (error) {
+      console.error("Error fetching visible objects:", error);
+    }
+  };
+
+  // Toggle showing objects. When turned on, immediately fetch once and start polling.
+  const toggleShowingObjects = () => {
+    setIsShowingObjects((prev) => {
+      const next = !prev;
+      if (next) {
+        fetchVisibleObjects();
+      }
+      return next;
+    });
+  };
+
+  // Poll visible objects when the panel is shown.
+  useEffect(() => {
+    if (isShowingObjects) {
+      // start polling every 1s
+      pollingRef.current = window.setInterval(() => {
+        fetchVisibleObjects();
+      }, 1000);
+    } else {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [isShowingObjects]);
+
   return (
     <div style={{ minHeight: "100vh", padding: "24px", fontFamily: "Inter, sans-serif", background: "#f4f7fb", color: "#172033" }}>
       <div style={{ maxWidth: "980px", margin: "0 auto" }}>
@@ -91,6 +139,9 @@ function App() {
             Stop Detect
           </button>
         </div>
+        <button className="objects-toggle" onClick={toggleShowingObjects}>
+          {isShowingObjects ? "Hide" : "Show"} Objects
+        </button>
 
         <div
           style={{
@@ -140,6 +191,27 @@ function App() {
             </div>
           )}
         </div>
+        {isShowingObjects && (
+          <div className="objects-panel">
+            <h4 className="objects-title">Visible Objects</h4>
+            {visibleObjectsList.length === 0 ? (
+              <div className="objects-empty">No objects currently visible</div>
+            ) : (
+              <div className="objects-list">
+                {visibleObjectsList.map((obj: any, idx: number) => (
+                  <div key={idx} className="object-card">
+                    <div className="object-header">
+                      <span className="object-class">{obj.class_name}</span>
+                      <span className="object-lastseen">frame: {obj.last_seen_frame}</span>
+                    </div>
+                    <div className="object-body">Box: [{(obj.box || []).map((n: number) => Math.round(n)).join(", ")}]
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
