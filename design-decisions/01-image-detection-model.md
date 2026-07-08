@@ -1,6 +1,6 @@
-# Design Decision 001: Object Detection Model
+# ADR-001: Perception System Architecture
 
-**Status:** Accepted (Initial Development)
+**Status:** Accepted
 
 **Date:** July 1, 2026
 
@@ -8,153 +8,377 @@
 
 # Background
 
-The first major component of ATLAS is the perception system, which enables the robot to understand its environment through a live webcam feed.
+BAI is an AI-powered robotics platform capable of perceiving its environment, maintaining an internal world model, understanding voice commands, and autonomously planning actions.
 
-This perception system will serve as the foundation for all future functionality, including:
+The perception system is the foundation of the project. Every downstream subsystem—including world modeling, speech-guided task execution, planning, and robotics simulation—depends on accurate and reliable perception.
 
-- Object tracking
-- World modeling
-- Speech-guided task execution
-- Autonomous task planning
-- Robot control
-- Robotics simulation
-
-The goal of this decision is to select an object detection model that enables rapid development while remaining flexible enough to support future deployment on embedded hardware such as a Raspberry Pi or NVIDIA Jetson.
+The primary objective of this design is to create a modular architecture where individual components can evolve independently without requiring changes throughout the codebase.
 
 ---
 
-# Requirements
+# Functional Requirements
 
-The selected model should satisfy the following requirements:
+The perception subsystem must support:
 
-- Real-time object detection
-- High detection accuracy
-- Easy Python integration
-- Open-source
-- Active community support
-- Well-documented API
-- Easily replaceable with other detection models
-- Potential compatibility with embedded hardware
-
----
-
-# Candidate Models
-
-## Option 1 — YOLO11
-
-### Pros
-
-- Industry-standard object detection model
-- Excellent balance between speed and accuracy
-- Very easy to integrate using the Ultralytics Python API
-- Large open-source community
-- Extensive documentation and tutorials
-- Multiple model sizes available (Nano, Small, Medium, Large)
-
-### Cons
-
-- Larger models require more computational resources
-- Higher CPU/GPU usage than lightweight alternatives
-- May require optimization for Raspberry Pi deployment
+- Real-time webcam input
+- Object detection
+- Object tracking across frames
+- Persistent object identities
+- World model updates
+- Future dashboard streaming
+- Future speech-guided interaction
+- Future ROS2 integration
 
 ---
 
-## Option 2 — MobileNet SSD
+# Non-Functional Requirements
 
-### Pros
-
-- Designed specifically for mobile and embedded devices
-- Fast CPU inference
-- Low memory usage
-- Lower power consumption
-- Well suited for Raspberry Pi deployment
-
-### Cons
-
-- Lower detection accuracy than YOLO
-- Smaller community and ecosystem
-- Fewer modern features
-- Less flexibility for future expansion
+- Modular architecture
+- Replaceable detection models
+- Loose coupling between subsystems
+- Real-time performance
+- Python-first implementation
+- Open-source dependencies
+- Support for future embedded deployment
 
 ---
 
-## Option 3 — Segment Anything Model (SAM)
+# High-Level Architecture
 
-### Pros
-
-- State-of-the-art image segmentation
-- Can segment objects outside of predefined classes
-- Useful for robotics tasks requiring precise object boundaries
-- Strong potential for future grasp planning
-
-### Cons
-
-- Performs segmentation rather than object detection
-- Computationally intensive
-- Difficult to run in real time on embedded hardware
-- Better suited as a complementary model rather than the primary perception model
-
----
-
-# Decision
-
-The initial implementation will use **YOLO11**.
-
----
-
-# Rationale
-
-Although MobileNet SSD is more suitable for deployment on low-power embedded devices, the primary objective of the first development milestone is rapid software development rather than hardware optimization.
-
-YOLO11 offers:
-
-- Higher detection accuracy
-- Better documentation
-- A mature Python API
-- A larger developer community
-- Faster development with fewer integration challenges
-
-This allows development to focus on building the overall robotics software architecture before optimizing for embedded deployment.
+```text
+                Webcam
+                   │
+                   ▼
+           YOLODetector
+                   │
+                   ▼
+         FrameDetections
+                   │
+                   ▼
+            World Model
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+      Dashboard        Planner (Future)
+                            │
+                            ▼
+                     Robot Actions
+```
 
 ---
 
-# Future Considerations
+# Component Responsibilities
 
-The perception system should be designed so that the object detection model can be replaced without affecting the rest of the software.
+## YOLODetector
 
-Future models to evaluate include:
+Responsibilities:
 
-- YOLO11 Nano
-- MobileNet SSD
-- Grounding DINO
-- OWLv2
-- Florence-2
+- Capture video frames
+- Execute YOLO inference
+- Perform ByteTrack object tracking
+- Produce typed Detection objects
+- Return one FrameDetections object per frame
 
-Benchmarking should compare:
+The detector **does not maintain long-term state**.
 
-- Detection accuracy
-- Frames per second (FPS)
-- CPU utilization
-- GPU utilization
-- Memory usage
-- Inference latency
-- Power consumption
-- Raspberry Pi performance
-- NVIDIA Jetson performance
+Its responsibility ends after processing the current frame.
+
+---
+
+## Detection
+
+Each detected object contains:
+
+- Class ID
+- Class name
+- Confidence
+- Bounding box
+- Frame index
+- Tracking ID
+
+```text
+Detection
+──────────────
+class_id
+class_name
+confidence
+box
+frame_index
+track_id
+```
+
+---
+
+## FrameDetections
+
+Each processed frame is represented by a collection of detections.
+
+```text
+FrameDetections
+──────────────────────
+frame_index
+detections[]
+```
+
+This allows downstream systems to reason about an entire scene rather than individual detections.
+
+---
+
+## World Model
+
+The World Model maintains persistent knowledge about the environment.
+
+Responsibilities:
+
+- Store tracked objects
+- Update object positions
+- Remember previously observed objects
+- Maintain object visibility
+- Serve as the source of truth for planners
+
+Unlike the detector, the World Model persists across frames.
+
+---
+
+# Object Lifetime
+
+```text
+Frame 1
+
+Bottle (ID 4)
+
+↓
+
+World
+ID 4
+visible = true
+
+↓
+
+Frame 2
+
+Bottle (ID 4)
+
+↓
+
+Update
+
+↓
+
+Frame 10
+
+Bottle disappears
+
+↓
+
+World
+
+ID 4
+visible = false
+last_seen_frame = 10
+```
+
+This allows the robot to remember objects after they leave the camera view.
+
+---
+
+# UML Class Diagram
+
+```text
+                    +----------------------+
+                    |   ImageDetector      |
+                    |----------------------|
+                    | +process_frame()     |
+                    +----------▲-----------+
+                               |
+                               |
+                    +----------+-----------+
+                    |     YOLODetector     |
+                    |----------------------|
+                    | -model : YOLO        |
+                    |----------------------|
+                    | +process_frame()     |
+                    | +detect()            |
+                    +----------+-----------+
+                               |
+                creates        |
+                               ▼
+                  +----------------------+
+                  |     Detection        |
+                  |----------------------|
+                  | class_id             |
+                  | class_name           |
+                  | confidence           |
+                  | box                  |
+                  | frame_index          |
+                  | track_id             |
+                  +----------------------+
+
+                               ▲
+
+                               |
+
+                  +----------------------+
+                  |  FrameDetection      |
+                  |----------------------|
+                  | frame_index          |
+                  | detections[]         |
+                  +----------------------+
+
+                               |
+
+                               ▼
+
+                  +----------------------+
+                  |    World             |
+                  |----------------------|
+                  | memory               |
+                  |----------------------|
+                  | update()             |
+                  | get_visible_objects()|
+                  | get_object_by_track  |
+                  | _id(track_id: int)   |
+                  +----------------------+
+```
+
+---
+
+# Sequence Diagram
+
+```text
+Camera
+
+ │
+
+ │ frame
+
+ ▼
+
+YOLODetector
+
+ │
+
+ │ process_frame()
+
+ ▼
+
+FrameDetections
+
+ │
+
+ │ update()
+
+ ▼
+
+WorldModel
+
+ │
+
+ │ current world state
+
+ ▼
+
+Planner (future)
+
+ │
+
+ ▼
+
+Robot
+```
+
+---
+
+# Design Decisions
+
+## Typed Data Models
+
+Instead of exposing raw Ultralytics objects throughout the application, the detector converts every prediction into custom dataclasses.
+
+Advantages:
+
+- Model-independent interface
+- Easier testing
+- Cleaner APIs
+- Strong typing
+- Simpler serialization
+
+---
+
+## Frame-Based Processing
+
+The detector emits one FrameDetections object per frame rather than individual detections.
+
+Advantages:
+
+- Represents the complete scene
+- Simplifies world model updates
+- Supports future planning algorithms
+- Enables frame-level statistics
+
+---
+
+## Persistent World Model
+
+The detector remains stateless.
+
+Persistent information is maintained exclusively inside the World Model.
+
+Advantages:
+
+- Separation of concerns
+- Easier debugging
+- Future support for planning
+- Supports memory and reasoning
+
+---
+
+## Model Abstraction
+
+The project defines an abstract ImageDetector interface.
+
+Concrete implementations include:
+
+- YOLO11
+- MobileNet SSD (future)
+- GroundingDINO (future)
+- Florence-2 (future)
+
+Replacing the detector should not require changes elsewhere in the system.
+
+---
+
+# Assumptions
+
+Current assumptions include:
+
+- One primary camera input.
+- ByteTrack provides stable tracking IDs.
+- Each tracked object has a unique ID.
+- The world model is the single source of truth for object state.
+- Object identity persists until explicitly removed.
+- One frame is processed at a time.
+- Real-time performance is prioritized over maximum detection accuracy during early development.
 
 ---
 
 # Risks
 
-- Larger YOLO11 models may not achieve acceptable performance on Raspberry Pi hardware.
-- Additional optimization techniques such as quantization or model pruning may be required.
-- Embedded deployment may ultimately require replacing YOLO11 with a lighter-weight detector.
+- Tracking IDs may change after prolonged occlusion.
+- Embedded deployment may require replacing YOLO11 with a lighter detector.
+- Long-running sessions may require world model pruning.
+- Future multi-camera support will require redesigning object identity management.
 
 ---
 
-# Follow-Up Tasks
+# Future Work
 
-- [ ] Integrate YOLO11 into the perception pipeline.
-- [ ] Measure inference latency on development hardware.
-- [ ] Design a common detector interface to support interchangeable models.
-- [ ] Benchmark lightweight models during future development.
+- Dashboard video streaming
+- React visualization
+- Speech recognition
+- LLM task planner
+- ROS2 integration
+- Robotics simulation
+- Multi-camera perception
+- Sensor fusion
+- Semantic mapping
