@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-
 import cv2
 from ultralytics import YOLO
-
 from backend.image_detection.detector import ImageDetector
 
 
@@ -13,11 +11,12 @@ class Detection:
     confidence: float
     box: tuple[float, float, float, float]
     frame_index: int
+    track_id: int | None = None
 
     def verbose(self) -> str:
         return (
             f"frame={self.frame_index} class={self.class_name} "
-            f"confidence={self.confidence:.2f} box={self.box}"
+            f"confidence={self.confidence:.2f} box={self.box} track_id={self.track_id}"
         )
 
 
@@ -27,7 +26,7 @@ class YOLODetector(ImageDetector):
         self.model = YOLO("yolo11n.pt")
 
     def process_frame(self, frame, confidence, frame_index):
-        results = self.model(frame, conf=confidence, stream=False, verbose=False)
+        results = self.model.track(frame, conf=confidence, persist=True, tracker="bytetrack.yaml", stream=False, verbose=False)
         detections = []
         annotated_frame = frame
 
@@ -86,6 +85,8 @@ class YOLODetector(ImageDetector):
             cls_id = int(cls_value) if cls_value is not None else -1
             confidence = float(confidence_value) if confidence_value is not None else 0.0
             class_name = names.get(cls_id, str(cls_id))
+            track_value = self._first_value(getattr(box, "id", None))
+            track_id = int(track_value) if track_value is not None else None
             detections.append(
                 Detection(
                     class_id=cls_id,
@@ -93,6 +94,7 @@ class YOLODetector(ImageDetector):
                     confidence=confidence,
                     box=coords,
                     frame_index=frame_index,
+                    track_id=track_id
                 )
             )
 
