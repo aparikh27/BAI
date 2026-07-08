@@ -2,27 +2,9 @@ from dataclasses import dataclass
 import cv2
 from ultralytics import YOLO
 from backend.image_detection.detector import ImageDetector
+from backend.image_detection.detector import Detection, FrameDetection
 
 
-@dataclass
-class Detection:
-    class_id: int
-    class_name: str
-    confidence: float
-    box: tuple[float, float, float, float]
-    frame_index: int
-    track_id: int | None = None
-
-    def verbose(self) -> str:
-        return (
-            f"frame={self.frame_index} class={self.class_name} "
-            f"confidence={self.confidence:.2f} box={self.box} track_id={self.track_id}"
-        )
-
-@dataclass
-class FrameDetection:
-    frame_index: int
-    detections: list[Detection]
 
 class YOLODetector(ImageDetector):
     def __init__(self):
