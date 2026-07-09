@@ -57,6 +57,8 @@ function App() {
         speechEventSourceRef.current = null;
       }
 
+      setSpeechTranscript("Listening stopped.");
+
       // 3. Turn the UI stream off
       setIsStreaming(false);
     } catch (error) {

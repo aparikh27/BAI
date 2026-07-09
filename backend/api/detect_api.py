@@ -27,7 +27,9 @@ async def detect(request: DetectRequest):
     if not started:
         return {"status": "Detection already running"}
 
+    audio_recorder.start_listening()
     return {"status": "Detection started"}
+
 
 @detect_router.post('/stopDetect')
 async def stopDetect():
@@ -36,6 +38,7 @@ async def stopDetect():
     if not stopped:
         return {"status": "Detection is not running"}
 
+    audio_recorder.stop_listening()
     return {"status": "Detection stopped"}
 
 @detect_router.get('/video-feed')
@@ -75,7 +78,7 @@ def stream_speech():
     """Streams microphone transcriptions to the frontend as server-sent events."""
 
     def generate():
-        while True:
+        while audio_recorder.listening:
             try:
                 transcript = audio_recorder.transcribe_microphone().strip()
                 if transcript:
