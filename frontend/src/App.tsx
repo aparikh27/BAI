@@ -5,7 +5,9 @@ function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isShowingObjects, setIsShowingObjects] = useState<boolean>(false);
   const [visibleObjectsList, setVisibleObjectsList] = useState<any[]>([]);
+  const [speechTranscript, setSpeechTranscript] = useState<string>("Waiting for voice command...");
   const pollingRef = useRef<number | null>(null);
+  const speechEventSourceRef = useRef<EventSource | null>(null);
 
 
   const detect = async () => {
@@ -30,6 +32,7 @@ function App() {
       // 2. If backend successfully started, turn the UI stream on
       if (response.ok) {
         setIsStreaming(true);
+        startStreaming();
       }
     } catch (error) {
       console.error("Error starting detection:", error);
@@ -49,6 +52,11 @@ function App() {
       const data = await response.json();
       console.log(data);
 
+      if (speechEventSourceRef.current) {
+        speechEventSourceRef.current.close();
+        speechEventSourceRef.current = null;
+      }
+
       // 3. Turn the UI stream off
       setIsStreaming(false);
     } catch (error) {
@@ -67,7 +75,37 @@ function App() {
     }
   };
 
-  // Toggle showing objects. When turned on, immediately fetch once and start polling.
+  const startStreaming = () => {
+    if (speechEventSourceRef.current) {
+      speechEventSourceRef.current.close();
+    }
+
+    const eventSource = new EventSource("http://127.0.0.1:8000/api/stream-speech");
+    speechEventSourceRef.current = eventSource;
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.transcript) {
+          setSpeechTranscript(data.transcript);
+        }
+      } catch (error) {
+        console.error("Error parsing streaming chunk:", error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error("EventSource failed or closed:", error);
+      eventSource.close();
+      if (speechEventSourceRef.current === eventSource) {
+        speechEventSourceRef.current = null;
+      }
+    };
+
+    return eventSource;
+  };
+
+  
   const toggleShowingObjects = () => {
     setIsShowingObjects((prev) => {
       const next = !prev;
@@ -78,10 +116,9 @@ function App() {
     });
   };
 
-  // Poll visible objects when the panel is shown.
+  
   useEffect(() => {
     if (isShowingObjects) {
-      // start polling every 1s
       pollingRef.current = window.setInterval(() => {
         fetchVisibleObjects();
       }, 1000);
@@ -96,6 +133,10 @@ function App() {
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
+      }
+      if (speechEventSourceRef.current) {
+        speechEventSourceRef.current.close();
+        speechEventSourceRef.current = null;
       }
     };
   }, [isShowingObjects]);
@@ -190,6 +231,19 @@ function App() {
               Start detection to begin streaming the live feed.
             </div>
           )}
+        </div>
+        <div
+          style={{
+            marginTop: "20px",
+            background: "white",
+            borderRadius: "16px",
+            boxShadow: "0 12px 30px rgba(15, 23, 42, 0.08)",
+            padding: "18px",
+            border: "1px solid #e9eef6",
+          }}
+        >
+          <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>Voice Commands</h3>
+          <p style={{ margin: 0, color: "#475569", lineHeight: 1.5 }}>{speechTranscript}</p>
         </div>
         {isShowingObjects && (
           <div className="objects-panel">
