@@ -33,81 +33,55 @@ The planning system should satisfy the following requirements:
 
 ---
 
-# Candidate Models
+# Candidate Models (Local Edge Optimization)
 
-## Option 1 — GLM-5.2
+## Option 1 — Qwen 2.5 1.5B Instruct
 
 ### Pros
 
-- Excellent reasoning performance
-- Designed for agentic workflows
-- Strong structured output capabilities
-- Open-source
-- Local deployment
-- Well suited for robotics planning
-- Supports tool-based reasoning
+- **Incredibly Lightweight:** At only 1.5 billion parameters, it requires less than 4GB of RAM to run.
+- **Top-Tier JSON/Structured Output:** Punches far above its weight class when generating specific formatting or raw API payloads.
+- **Extremely Low Latency:** Delivers instantaneous responses on consumer CPUs, preserving your real-time streaming goal.
 
 ### Cons
 
-- Larger computational requirements than lightweight models
-- May require quantization for embedded deployment
+- Limited general world knowledge compared to giant models (though plenty smart enough to map phrases to robot actions).
 
 ---
 
-## Option 2 — Kimi K2.5
+## Option 2 — DeepSeek R1 Distilled Qwen 1.5B
 
 ### Pros
 
-- Excellent reasoning ability
-- Strong coding capabilities
-- Long context window
-- Open-source
-- Local deployment
+- **Advanced Local Reasoning:** It's a tiny model trained specifically on reasoning traces from the massive 671B DeepSeek-R1 model.
+- **Excellent for Intent Disambiguation:** Great at figuring out messy, spoken user commands (e.g., if a user stumbles over words, it pauses to think and outputs the correct plan).
+- **Fast Local Inference:** Maintains the ultra-low compute footprint of a 1.5B parameter model.
 
 ### Cons
 
-- Optimized primarily for coding and general reasoning
-- Less focused on agentic planning than GLM
+- Can sometimes emit unnecessary `<think>` tags in its output text block which you will have to strip out before executing your code.
 
 ---
 
-## Option 3 — Llama 3.3 70B
+## Option 3 — Phi-3.5 Mini Instruct (3.8B)
 
 ### Pros
 
-- Large open-source ecosystem
-- Strong instruction following
-- Mature tooling
-- Proven reasoning performance
+- **Strong Logical Reasoning:** Built by Microsoft with a heavy focus on math, logic, and following strict instruction templates.
+- **Great Multi-turn Tracking:** Excellent at remembering context from previous spoken commands if the user is giving a sequence of instructions.
+- **Highly Reliable Tool Calling:** Very consistent at mapping casual speech directly to deterministic functions.
 
 ### Cons
 
-- Very large memory requirements
-- Difficult to run locally without high-end hardware
-- Higher inference latency
-
----
-
-## Option 4 — DeepSeek-R
-
-### Pros
-
-- Excellent reasoning performance
-- Strong planning capabilities
-- Open-source
-
-### Cons
-
-- Computationally intensive
-- Slower inference than smaller alternatives
+- Slightly larger parameter size means it will consume a bit more RAM (~6-8GB) and CPU cycles than the 1.5B options.
 
 ---
 
 # Decision
 
-The initial implementation will use **GLM-5.2**.
+The initial implementation will use **Qwen 2.5 1.5B Instruct**. 
 
-The planner will be abstracted behind a common interface so that future implementations can replace GLM with another language model without affecting the remainder of the system.
+The planner will be abstracted behind a common interface so that future implementations can replace the local model with another language model without affecting the remainder of the system.
 
 ---
 
@@ -115,7 +89,7 @@ The planner will be abstracted behind a common interface so that future implemen
 
 The primary objective of the first development milestone is to create an autonomous robotics platform capable of running entirely with open-source software.
 
-GLM-5.2 provides:
+QWEN provides:
 
 - Excellent reasoning ability
 - Strong support for agentic workflows
