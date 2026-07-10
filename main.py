@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.detect_api import detect_router
+from backend.api.speech_api import speech_router
 
 app = FastAPI()
 
@@ -18,3 +19,4 @@ app.add_middleware(
 
 
 app.include_router(detect_router, prefix="/api")
+app.include_router(speech_router, prefix="/api")

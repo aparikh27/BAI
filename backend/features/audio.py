@@ -18,7 +18,7 @@ class ContinuousAudioStream:
 
     def stream_and_transcribe(self):
         """Generator that yields transcripts continuously."""
-        # Open a live, non-blocking hardware input stream
+        
         with sd.InputStream(samplerate=self.fs, channels=1, dtype='float32', callback=self._callback):
             print("Continuous listening started...")
             
@@ -26,22 +26,22 @@ class ContinuousAudioStream:
             samples_collected = 0
             
             while True:
-                # Pull raw data chunk from the queue
+                
                 data_chunk = self.audio_queue.get()
                 buffer.append(data_chunk)
                 samples_collected += len(data_chunk)
                 
-                # Once we have accumulated enough samples for a 3-second block
+                
                 if samples_collected >= self.chunk_samples:
-                    # Combine chunks and flatten to 1D
+                    
                     full_block = np.concatenate(buffer, axis=0).flatten()
                     
-                    # Transcribe the rolling chunk
+                    
                     transcript = speech_model.process_audio(full_block)
                     
-                    if transcript:  # Only yield if the user actually said something
+                    if transcript:  
                         yield transcript
                     
-                    # Reset buffer for the next window
+                    
                     buffer = []
                     samples_collected = 0

@@ -6,6 +6,7 @@ function App() {
   const [isShowingObjects, setIsShowingObjects] = useState<boolean>(false);
   const [visibleObjectsList, setVisibleObjectsList] = useState<any[]>([]);
   const [speechTranscript, setSpeechTranscript] = useState<string>("Waiting for voice command...");
+  const [robotCommand, setRobotCommand] = useState<string>("No robot command yet.");
   const pollingRef = useRef<number | null>(null);
   const speechEventSourceRef = useRef<EventSource | null>(null);
 
@@ -58,6 +59,7 @@ function App() {
       }
 
       setSpeechTranscript("Listening stopped.");
+      setRobotCommand("No robot command yet.");
 
       // 3. Turn the UI stream off
       setIsStreaming(false);
@@ -90,6 +92,9 @@ function App() {
         const data = JSON.parse(event.data);
         if (data.transcript) {
           setSpeechTranscript(data.transcript);
+        }
+        if (data.command !== undefined) {
+          setRobotCommand(data.command);
         }
       } catch (error) {
         console.error("Error parsing streaming chunk:", error);
@@ -246,6 +251,9 @@ function App() {
         >
           <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>Voice Commands</h3>
           <p style={{ margin: 0, color: "#475569", lineHeight: 1.5 }}>{speechTranscript}</p>
+          <p style={{ margin: "8px 0 0", color: "#2563eb", lineHeight: 1.5, fontWeight: 600, whiteSpace: "pre-wrap" }}>
+            Robot Command: {robotCommand}
+          </p>
         </div>
         {isShowingObjects && (
           <div className="objects-panel">

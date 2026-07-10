@@ -6,7 +6,12 @@ import whisper
 class WhisperModel(SpeechModel):
     def __init__(self, model_name: str):
         super().__init__(model_name)
-        self.model = whisper.load_model(model_name)
+        self.model = None
+
+    def _get_model(self):
+        if self.model is None:
+            self.model = whisper.load_model(self.model_name)
+        return self.model
 
     def process_audio(self, audio_data) -> str:
         """
@@ -19,6 +24,6 @@ class WhisperModel(SpeechModel):
             if audio_data.ndim > 1:
                 audio_data = audio_data.reshape(-1)
 
-        result = self.model.transcribe(audio_data)
+        result = self._get_model().transcribe(audio_data)
 
         return result.get("text", "").strip()
