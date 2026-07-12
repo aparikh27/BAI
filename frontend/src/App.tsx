@@ -19,7 +19,7 @@ function App() {
     };
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/detect", {
+      const response = await fetch("/api/detect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -43,7 +43,7 @@ function App() {
   const stopDetect = async () => {
     console.log("Sending stop detect request");
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/stopDetect", {
+      const response = await fetch("/api/stopDetect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -70,7 +70,7 @@ function App() {
 
   const fetchVisibleObjects = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/visible-objects");
+      const response = await fetch("/api/visible-objects");
       if (!response.ok) return;
       const data = await response.json();
       setVisibleObjectsList(data.visible_objects || []);
@@ -84,7 +84,10 @@ function App() {
       speechEventSourceRef.current.close();
     }
 
-    const eventSource = new EventSource("http://127.0.0.1:8000/api/stream-speech");
+    setSpeechTranscript("Listening for a voice command...");
+    setRobotCommand("Waiting for robot command...");
+
+    const eventSource = new EventSource("/api/stream-speech");
     speechEventSourceRef.current = eventSource;
 
     eventSource.onmessage = (event) => {
@@ -102,10 +105,11 @@ function App() {
     };
 
     eventSource.onerror = (error) => {
-      console.error("EventSource failed or closed:", error);
-      eventSource.close();
+      console.error("Speech stream disconnected; retrying:", error);
+      // EventSource reconnects automatically. Closing it here prevents the
+      // dashboard from recovering after a transient backend startup failure.
       if (speechEventSourceRef.current === eventSource) {
-        speechEventSourceRef.current = null;
+        setSpeechTranscript("Speech stream disconnected. Reconnecting...");
       }
     };
 
@@ -141,12 +145,17 @@ function App() {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
+    };
+  }, [isShowingObjects]);
+
+  useEffect(() => {
+    return () => {
       if (speechEventSourceRef.current) {
         speechEventSourceRef.current.close();
         speechEventSourceRef.current = null;
       }
     };
-  }, [isShowingObjects]);
+  }, []);
 
   return (
     <div style={{ minHeight: "100vh", padding: "24px", fontFamily: "Inter, sans-serif", background: "#f4f7fb", color: "#172033" }}>
@@ -218,7 +227,7 @@ function App() {
 
           {isStreaming ? (
             <img
-              src={`http://127.0.0.1:8000/api/video-feed?t=${Date.now()}`}
+              src={`/api/video-feed?t=${Date.now()}`}
               alt="Live YOLO Stream"
               style={{ width: "100%", maxWidth: "100%", borderRadius: "12px", display: "block", background: "#0f172a" }}
             />

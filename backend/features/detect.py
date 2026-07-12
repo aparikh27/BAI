@@ -75,7 +75,7 @@ class DetectorService:
                         if obj.visible:
                             print(f" -> [ID {track_id}] {obj.class_name} | Box: {[round(x, 1) for x in obj.box]}")
                     print("-------------------------------\n")
-                    
+                    time.sleep(0.1)
                     last_logged_ids = current_ids
 
         finally:

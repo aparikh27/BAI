@@ -2,20 +2,22 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from backend.features.audio import ContinuousAudioStream
 import json
+import queue
+import threading
 from backend.brain.brain_qwen import QWENBRAIN
 
 speech_router = APIRouter()
-streamer = None
 brain = None
+brain_lock = threading.Lock()
 
 
 def get_speech_components():
-    global streamer, brain
-    if streamer is None:
-        streamer = ContinuousAudioStream(chunk_duration=3)
+    global brain
+    # Capture state belongs to a single browser connection. Reusing an old
+    # InputStream causes reconnects to compete for the same microphone.
     if brain is None:
         brain = QWENBRAIN()
-    return streamer, brain
+    return ContinuousAudioStream(chunk_duration=3), brain
 
 
 @speech_router.get("/stream-speech")
@@ -23,20 +25,77 @@ async def stream_speech():
     streamer_instance, brain_instance = get_speech_components()
 
     def audio_generator():
-        for transcript in streamer_instance.stream_and_transcribe():
-            if not transcript.strip():
-                continue
+        stop_event = threading.Event()
+        events = queue.Queue()
+        command_queue = queue.Queue()
+        sentinel = object()
+        transcription_complete = object()
+        command_complete = object()
 
+        def transcribe():
             try:
-                command = brain_instance.process_task(transcript)
+                for transcript in streamer_instance.stream_and_transcribe(stop_event=stop_event):
+                    if stop_event.is_set():
+                        break
+                    if transcript.strip():
+                        # Transcription is sent immediately; Qwen inference must
+                        # never block the microphone capture loop.
+                        events.put({"transcript": transcript})
+                        command_queue.put(transcript)
             except Exception as exc:
-                print(f"Speech command processing error: {exc}")
-                command = ""
+                print(f"Speech transcription error: {exc}")
+            finally:
+                command_queue.put(sentinel)
+                events.put(transcription_complete)
 
-            if not command or command == "[]":
-                command = "No robot command detected."
+        def process_commands():
+            try:
+                while not stop_event.is_set():
+                    try:
+                        transcript = command_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    if transcript is sentinel:
+                        break
 
-            yield f"data: {json.dumps({'transcript': transcript, 'command': command})}\n\n"
+                    try:
+                        # A reconnect can overlap an in-flight request. Llama's
+                        # model instance is shared, so only inference is
+                        # serialized; microphone capture remains continuous.
+                        with brain_lock:
+                            command = brain_instance.process_task(transcript)
+                    except Exception as exc:
+                        print(f"Speech command processing error: {exc}")
+                        command = ""
+
+                    if not command or command == "[]":
+                        command = "No robot command detected."
+                    events.put({"command": command})
+            finally:
+                events.put(command_complete)
+
+        threading.Thread(target=transcribe, daemon=True).start()
+        threading.Thread(target=process_commands, daemon=True).start()
+
+        transcription_done = False
+        command_done = False
+        try:
+            while not (transcription_done and command_done):
+                try:
+                    event = events.get(timeout=15)
+                except queue.Empty:
+                    # Keep the SSE connection alive during silence.
+                    yield ": keep-alive\n\n"
+                    continue
+
+                if event is transcription_complete:
+                    transcription_done = True
+                elif event is command_complete:
+                    command_done = True
+                else:
+                    yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            stop_event.set()
 
     return StreamingResponse(
         audio_generator(), 
