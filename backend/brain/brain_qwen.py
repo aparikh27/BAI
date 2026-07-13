@@ -40,8 +40,8 @@ class QWENBRAIN(Brain):
             f"<|im_start|>system\n{self.system_instruction}<|im_end|>\n"
             f"<|im_start|>user\nTask Input: look around for my car keys<|im_end|>\n"
             f"<|im_start|>assistant\n" + '[{"action": "detect_object", "target": "keys"}]' + "<|im_end|>\n"
-            f"<|im_start|>user\nTask Input: Pick up the red ball and place it on the table<|im_end|>\n"
-            f"<|im_start|>assistant\n" + '[{"action": "detect_object", "target": "red ball"}, {"action": "pick_up", "target": "red ball"}, {"action": "place_on", "target": "table"}]' + "<|im_end|>\n"
+            f"<|im_start|>user\nTask Input: Pick up the red ball and bring it to me<|im_end|>\n"
+            f"<|im_start|>assistant\n" + '[{"action": "detect_object", "target": "red ball"}, {"action": "pick_up", "target": "red ball"}, {"action": "get_object", "target": "table"}]' + "<|im_end|>\n"
             f"<|im_start|>user\nTask Input: {task_data}<|im_end|>\n"
             f"<|im_start|>assistant\n"
         )
