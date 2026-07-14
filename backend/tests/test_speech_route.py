@@ -39,3 +39,37 @@ def test_speech_stream_emits_sse_payload(monkeypatch):
             {"transcript": "move forward"},
             {"command": '[{"action":"move","target":"forward"}]'},
         ]
+
+
+def test_speech_stream_dispatches_robot_command(monkeypatch):
+    calls = []
+
+    class FakeStreamer:
+        def stream_and_transcribe(self, stop_event=None):
+            yield "move forward"
+
+    class FakeBrain:
+        def process_task(self, text):
+            return '[{"action":"detect_object","target":"bottle"}]'
+
+    class FakeExecutor:
+        def execute_command(self, command, target):
+            calls.append((command, target))
+            return True
+
+    monkeypatch.setattr(
+        speech_api,
+        "get_speech_components",
+        lambda: (FakeStreamer(), FakeBrain()),
+    )
+    speech_api.set_robot_executor(FakeExecutor())
+
+    try:
+        client = TestClient(app)
+        with client.stream("GET", "/api/stream-speech") as response:
+            assert response.status_code == 200
+            _ = b"".join(response.iter_bytes())
+    finally:
+        speech_api.set_robot_executor(None)
+
+    assert calls == [("detect_object", "bottle")]

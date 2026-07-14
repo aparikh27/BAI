@@ -13,28 +13,63 @@ class RobotExecutor:
         self.robot = robot_driver 
         self.world = world
 
+    def _resolve_object(self, target_item: str):
+        """
+        Resolve a Qwen target to a world object.
+
+        The planner may output either a numeric track ID or a class name.
+        """
+        if target_item is None:
+            return None
+
+        target_text = str(target_item).strip()
+        if not target_text:
+            return None
+        print(f"[EXECUTOR LOG] Attempting to resolve target text: '{target_text}'")
+        
+
+        if target_text.isdigit():
+            obj = self.world.get_object_by_track_id(int(target_text))
+            if obj and obj.visible:
+                print(f"[EXECUTOR LOG] Match found! Resolved '{target_text}' to object label '{obj.class_name}'")
+                return obj
+
+        normalized_target = target_text.lower()
+        for obj in self.world.get_visible_objects():
+            if obj.class_name.lower() == normalized_target:
+                print(f"[EXECUTOR LOG] Match found! Resolved '{target_text}' to object label '{obj.class_name}'")
+                return obj
+
+        print(f"[EXECUTOR LOG] No match found for target text: '{target_text}'")
+        return None
+
     def _align_and_approach(self, target_item: str) -> float:
         """
         Rotates the robot until the object is perfectly centered in the 
         YOLO camera view, then returns the distance sensor measurement.
         """
+        obj = self._resolve_object(target_item)
+        if obj is None:
+            print(f"Target '{target_item}' not found in the visible world.")
+            return 0.0
+
         camera_width = self.robot.get_camera_width()
         screen_center = camera_width / 2
         
         # Deadzone: how many pixels off-center we tolerate before stopping rotation
         pixel_tolerance = 20  
 
-        print(f"Visual Servoing: Aligning camera with target ID {target_item}...")
+        print(f"Visual Servoing: Aligning camera with target '{target_item}'...")
 
         while True:
-            obj = self.world.get_object_by_track_id(int(target_item))
-            if not obj or not obj.visible:
+            obj = self._resolve_object(target_item)
+            if not obj:
                 print(f"Target {target_item} lost from camera view! Stopping.")
                 self.robot.stop()
                 return 0.0
 
-            # YOLO bounding box: [x_center, y_center, width, height]
-            obj_x_center = obj.box[0]
+            # YOLO bounding box: [x_min, y_min, x_max, y_max]
+            obj_x_center = (obj.box[0] + obj.box[2]) / 2
             error_pixels = obj_x_center - screen_center
 
             # If it's close enough to the center, break the alignment loop
@@ -43,9 +78,6 @@ class RobotExecutor:
                 self.robot.stop()
                 break
 
-            # Reactive adjustment: Turn small increments based on direction
-            # If target is to the left (error < 0), turn left (-3 degrees)
-            # If target is to the right (error > 0), turn right (+3 degrees)
             turn_step = 3.0 if error_pixels > 0 else -3.0
             self.robot.turn(turn_step)
             
@@ -99,15 +131,15 @@ class RobotExecutor:
         self.robot.move_forward(distance)
         self.robot.turn(180)
         return True
-    
+
     def execute_command(self, command: str, target_item: str) -> bool:
         """
         Executes high-level intent commands coming from the Qwen planner.
         """
         print(f"Executor running: '{command}' on target ID: '{target_item}'")
         
-        if command == "detect_item":
-            return int(target_item) in self.world.memory
+        if command in {"detect_item", "detect_object"}:
+            return self._resolve_object(target_item) is not None
             
         elif command == "pick_up":
             self.robot.lower_arm()

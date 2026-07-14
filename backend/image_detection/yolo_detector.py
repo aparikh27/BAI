@@ -12,7 +12,17 @@ class YOLODetector(ImageDetector):
         self.model = YOLO("yolo11n.pt")
 
     def process_frame(self, frame, confidence, frame_index):
-        results = self.model.track(frame, conf=confidence, persist=True, tracker="bytetrack.yaml", stream=False, verbose=False)
+        if hasattr(self.model, "track"):
+            results = self.model.track(
+                frame,
+                conf=confidence,
+                persist=True,
+                tracker="bytetrack.yaml",
+                stream=False,
+                verbose=False
+            )
+        else:
+            results = self.model(frame, conf=confidence, stream=False, verbose=False)
         detections = []
         annotated_frame = frame
 

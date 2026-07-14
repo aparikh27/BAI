@@ -6,6 +6,18 @@ from backend.speech.speech_whisper import WhisperModel
 
 speech_model = WhisperModel(model_name="tiny")
 
+class Audio:
+    def __init__(self, duration=3):
+        self.duration = duration
+        self.listening = False
+
+    def start_listening(self):
+        self.listening = True
+
+    def stop_listening(self):
+        self.listening = False
+
+
 class ContinuousAudioStream:
     def __init__(self, chunk_duration=3, fs=16000):
         self.chunk_duration = chunk_duration  # Process audio in 3-second blocks

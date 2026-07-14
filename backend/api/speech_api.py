@@ -5,10 +5,13 @@ import json
 import queue
 import threading
 from backend.brain.brain_qwen import QWENBRAIN
+from backend.robot_execution.execution_logic import RobotExecutor
 
 speech_router = APIRouter()
 brain = None
 brain_lock = threading.Lock()
+robot_executor = None
+robot_executor_lock = threading.Lock()
 
 
 def get_speech_components():
@@ -18,6 +21,43 @@ def get_speech_components():
     if brain is None:
         brain = QWENBRAIN()
     return ContinuousAudioStream(chunk_duration=3), brain
+
+
+def set_robot_executor(executor: RobotExecutor | None):
+    global robot_executor
+    with robot_executor_lock:
+        robot_executor = executor
+
+
+def _dispatch_robot_command(command: str):
+    if not command or command == "[]" or command == "No robot command detected.":
+        return
+
+    try:
+        plan = json.loads(command)
+    except json.JSONDecodeError:
+        return
+
+    if not isinstance(plan, list):
+        return
+
+    with robot_executor_lock:
+        executor = robot_executor
+
+    if executor is None:
+        return
+
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+
+        action = step.get("action") or step.get("command")
+        target = step.get("target") or step.get("target_item")
+        if action:
+            try:
+                executor.execute_command(action, target)
+            except Exception as exc:
+                print(f"Robot execution error: {exc}")
 
 
 @speech_router.get("/stream-speech")
@@ -71,6 +111,7 @@ async def stream_speech():
                     if not command or command == "[]":
                         command = "No robot command detected."
                     events.put({"command": command})
+                    _dispatch_robot_command(command)
             finally:
                 events.put(command_complete)
 
