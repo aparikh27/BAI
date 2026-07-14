@@ -132,6 +132,36 @@ class RobotExecutor:
         self.robot.turn(180)
         return True
 
+    def _scan_360_for_object(self, target_item: str) -> bool:
+        """
+        Rotates the robot in a full 360-degree circle in small increments,
+        checking if the target object becomes visible to the YOLO camera.
+        """
+        print(f"🔍 Starting active 360-degree scan for '{target_item}'...")
+        
+        # Define search steps (36 steps of 10 degrees = 360 degrees)
+        step_angle = 10.0
+        total_steps = 36
+        
+        for step in range(total_steps):
+            # 1. Check if we can see the object in the current frame
+            obj = self._resolve_object(target_item)
+            if obj is not None:
+                print(f"Target '{target_item}' spotted during scan!")
+                self.robot.stop()
+                return True
+            
+            # 2. Rotate slightly to scan the next slice of the room
+            # Positive angle rotates in one direction
+            self.robot.turn(step_angle)
+            
+            # 3. Pause briefly to allow Webots physics and YOLO memory to update
+            time.sleep(0.1)
+            
+        print(f"Completed 360-degree scan. '{target_item}' was not found.")
+        self.robot.stop()
+        return False
+
     def execute_command(self, command: str, target_item: str) -> bool:
         """
         Executes high-level intent commands coming from the Qwen planner.
@@ -139,7 +169,8 @@ class RobotExecutor:
         print(f"Executor running: '{command}' on target ID: '{target_item}'")
         
         if command in {"detect_item", "detect_object"}:
-            return self._resolve_object(target_item) is not None
+            # Call our new active scanning method instead of a passive check
+            return self._scan_360_for_object(target_item)
             
         elif command == "pick_up":
             self.robot.lower_arm()
