@@ -31,33 +31,45 @@ def set_robot_executor(executor: RobotExecutor | None):
 
 def _dispatch_robot_command(command: str):
     if not command or command == "[]" or command == "No robot command detected.":
+        print(f"[SPEECH-API] Skipping empty command: {repr(command)}")
         return
 
+    print(f"[SPEECH-API] Attempting to dispatch robot command: {repr(command)}")
+    
     try:
         plan = json.loads(command)
     except json.JSONDecodeError:
+        print(f"[SPEECH-API] Failed to parse command as JSON: {repr(command)}")
         return
 
     if not isinstance(plan, list):
+        print(f"[SPEECH-API] Command is not a list, got: {type(plan)}")
         return
 
     with robot_executor_lock:
         executor = robot_executor
 
     if executor is None:
+        print("[SPEECH-API] ERROR: Robot executor is None! Not wired to main.py lifespan.")
         return
+
+    print(f"[SPEECH-API] Executor available. Processing {len(plan)} command steps...")
 
     for step in plan:
         if not isinstance(step, dict):
+            print(f"[SPEECH-API] Skipping non-dict step: {step}")
             continue
 
         action = step.get("action") or step.get("command")
         target = step.get("target") or step.get("target_item")
+        print(f"[SPEECH-API] Executing step: action='{action}', target='{target}'")
+        
         if action:
             try:
                 executor.execute_command(action, target)
+                print(f"[SPEECH-API] Step completed successfully: {action}")
             except Exception as exc:
-                print(f"Robot execution error: {exc}")
+                print(f"[SPEECH-API] Robot execution error: {exc}")
 
 
 @speech_router.get("/stream-speech")

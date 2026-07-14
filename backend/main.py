@@ -7,7 +7,7 @@ from controller import Robot
 
 # Your custom modular codebase imports
 from backend.api.detect_api import detect_router
-from backend.api.speech_api import speech_router
+from backend.api.speech_api import speech_router, set_robot_executor
 from backend.robot_execution.webot import WebotDriver
 from backend.robot_execution.execution_logic import RobotExecutor
 from backend.features.memory import World
@@ -20,7 +20,7 @@ world_memory = World()
 # 2. Define the Lifespan event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🤖 FastAPI Lifespan Starting: Connecting to Webots Simulator...")
+    print("[ROBOT] FastAPI Lifespan Starting: Connecting to Webots Simulator...")
     try:
         # Initialize Webots interface link
         robot_instance = Robot()
@@ -33,14 +33,18 @@ async def lifespan(app: FastAPI):
         # Save it to our state container so endpoints can use it
         robot_app_state["executor"] = executor
         robot_app_state["world"] = world_memory
-        print("🎯 Handshake complete! Connected to Webots successfully.")
+        
+        # Wire the executor to the speech router for voice command execution
+        set_robot_executor(executor)
+        
+        print("[TARGET] Handshake complete! Connected to Webots successfully.")
     except Exception as e:
-        print(f"❌ Failed to link with Webots: {e}")
-        print("💡 Make sure Webots is open, set to <extern>, and playing!")
+        print(f"[ERROR] Failed to link with Webots: {e}")
+        print("[TIP] Make sure Webots is open, set to <extern>, and playing!")
 
     yield
     # Cleanup actions when server shuts down go here
-    print("🔌 FastAPI Lifespan Stopping: Disconnecting from Webots.")
+    print("[DISCONNECT] FastAPI Lifespan Stopping: Disconnecting from Webots.")
 
 # 3. Pass lifespan to FastAPI initialization
 app = FastAPI(lifespan=lifespan)

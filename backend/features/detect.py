@@ -11,9 +11,14 @@ from backend.features.memory import World, WorldObject
 
 class DetectorService:
 
-    def __init__(self):
+    def __init__(self, webots_driver=None):
+        """
+        Initialize detection service.
+        
+        :param webots_driver: Optional WebotDriver instance to use robot camera instead of local webcam.
+        """
         self.detector = YOLODetector()
-        self.camera = CameraService()
+        self.camera = CameraService(webots_driver=webots_driver)
         self.world = World()
         self.running = False
         self.thread = None
@@ -28,7 +33,7 @@ class DetectorService:
 
             self.running = True
             self.latest_frame = None
-            self.camera.start(source)
+            self.camera.start(source)       
 
             self.thread = threading.Thread(
                 target=self.run_detection,
@@ -68,7 +73,7 @@ class DetectorService:
                 current_ids = {track_id for track_id, obj in self.world.memory.items() if obj.visible}
 
                 if current_ids != last_logged_ids:
-                    print("\n--- 🌍 CURRENT WORLD STATE ---")
+                    print("\n--- [WORLD] CURRENT WORLD STATE ---")
                     if not visible_objects:
                         print("[World is empty]")
                     for track_id, obj in self.world.memory.items():

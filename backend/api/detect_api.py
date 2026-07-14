@@ -32,14 +32,20 @@ async def detect(request: Request, detect_req: DetectRequest):  # Added FastAPI 
     if not started:
         return {"status": "Detection already running"}
 
-    # 2. Link World Memory! 
-    # Force our Webots Robot Executor to read from this live detector's world instance
+    # Link World Memory and Robot Camera! 
     if hasattr(request.app.state, "robot_executor"):
         app_state = request.app.state.robot_executor
         if "executor" in app_state:
             # Override the executor's world reference with this endpoint's live world tracker
             app_state["executor"].world = detector_service.world
-            print("🔗 Connected Robot Executor memory to the active YOLO Detector World!")
+            print("[LINK] Connected Robot Executor memory to the active YOLO Detector World!")
+        
+        # Wire the robot camera to the detector's camera service
+        if app_state.get("executor") and hasattr(app_state["executor"], "robot"):
+            robot_driver = app_state["executor"].robot
+            detector_service.camera.webots_driver = robot_driver
+            detector_service.camera.use_webots = True
+            print("[CAMERA] Wired Webots robot camera to DetectorService (replacing local webcam)")
 
     audio_recorder.start_listening()
     return {"status": "Detection started"}
