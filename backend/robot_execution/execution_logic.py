@@ -165,24 +165,54 @@ class RobotExecutor:
     def execute_command(self, command: str, target_item: str) -> bool:
         """
         Executes high-level intent commands coming from the Qwen planner.
+        Includes alias mapping to catch variations in LLM output vocabulary.
         """
-        print(f"Executor running: '{command}' on target ID: '{target_item}'")
+        if not command:
+            print("Executor received an empty command.")
+            return False
+
+        # Normalize the command (lowercase and strip spaces/underscores)
+        normalized_cmd = str(command).strip().lower().replace(" ", "_")
+        print(f"Executor running: '{command}' (normalized: '{normalized_cmd}') on target: '{target_item}'")
+
+        # 1. Alias Maps
+        detect_aliases = {
+            "detect_item", "detect_object", "find_object", "find_item", 
+            "search_object", "search_item", "locate_object", "locate_item"
+        }
         
-        if command in {"detect_item", "detect_object"}:
-            # Call our new active scanning method instead of a passive check
+        pickup_aliases = {
+            "pick_up", "pickup", "grab_item", "grab_object", 
+            "lift_item", "lift_object"
+        }
+        
+        get_aliases = {
+            "get_object", "get_item", "retrieve_object", "retrieve_item", 
+            "fetch_object", "fetch_item", "move_to", "go_to"
+        }
+        
+        put_aliases = {
+            "put_object", "put_item", "drop_item", "drop_object", 
+            "place_item", "place_object", "deposit_item", "deposit_object"
+        }
+
+        # 2. Routing logic matching aliases
+        if normalized_cmd in detect_aliases:
             return self._scan_360_for_object(target_item)
             
-        elif command == "pick_up":
+        elif normalized_cmd in pickup_aliases:
+            print(f"Executing manual pick up sequence on {target_item}...")
             self.robot.lower_arm()
             self.robot.grab_item()
             self.robot.raise_arm()    
             return True
             
-        elif command == "get_object":
+        elif normalized_cmd in get_aliases:
             return self._get_object(target_item)
             
-        elif command == "put_object":
+        elif normalized_cmd in put_aliases:
             return self._put_object(target_item)
             
-        print(f"Unrecognized execution command keyword: '{command}'")
+        # Fallback error handling
+        print(f"⚠️ Unrecognized execution command keyword: '{command}'")
         return False
