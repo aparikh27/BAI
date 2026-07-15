@@ -56,7 +56,6 @@ class RobotExecutor:
         camera_width = self.robot.get_camera_width()
         screen_center = camera_width / 2
         
-        # Deadzone: how many pixels off-center we tolerate before stopping rotation
         pixel_tolerance = 20  
 
         print(f"Visual Servoing: Aligning camera with target '{target_item}'...")
@@ -67,12 +66,10 @@ class RobotExecutor:
                 print(f"Target {target_item} lost from camera view! Stopping.")
                 self.robot.stop()
                 return 0.0
-
-            # YOLO bounding box: [x_min, y_min, x_max, y_max]
+            
             obj_x_center = (obj.box[0] + obj.box[2]) / 2
             error_pixels = obj_x_center - screen_center
 
-            # If it's close enough to the center, break the alignment loop
             if abs(error_pixels) <= pixel_tolerance:
                 print("Target centered successfully!")
                 self.robot.stop()
@@ -81,25 +78,20 @@ class RobotExecutor:
             turn_step = 3.0 if error_pixels > 0 else -3.0
             self.robot.turn(turn_step)
             
-            # Short pause to allow simulator frame buffer / YOLO memory to refresh
             time.sleep(0.05)
 
-        # Now that we are perfectly facing the object, read physical distance
         distance_meters = self.robot.get_distance_to_front()
         return distance_meters
 
     def _get_object(self, target_item: str) -> bool:
         """Visually aligns with an object, approaches it, and picks it up."""
-        # 1. Align using vision and find out how far away it is
         distance = self._align_and_approach(target_item)
         if distance <= 0.0:
             return False
 
-        # 2. Drive up to it
         print(f"Driving forward {distance:.2f} meters to target.")
         self.robot.move_forward(distance)
 
-        # 3. Manipulation sequence
         print(f"Grabbing item {target_item}.")
         self.robot.lower_arm()
         self.robot.grab_item()
@@ -137,25 +129,21 @@ class RobotExecutor:
         Rotates the robot in a full 360-degree circle in small increments,
         checking if the target object becomes visible to the YOLO camera.
         """
-        print(f"🔍 Starting active 360-degree scan for '{target_item}'...")
+        print(f"Starting active 360-degree scan for '{target_item}'...")
         
-        # Define search steps (36 steps of 10 degrees = 360 degrees)
         step_angle = 10.0
         total_steps = 36
         
         for step in range(total_steps):
-            # 1. Check if we can see the object in the current frame
+
             obj = self._resolve_object(target_item)
             if obj is not None:
                 print(f"Target '{target_item}' spotted during scan!")
                 self.robot.stop()
                 return True
-            
-            # 2. Rotate slightly to scan the next slice of the room
-            # Positive angle rotates in one direction
+
             self.robot.turn(step_angle)
             
-            # 3. Pause briefly to allow Webots physics and YOLO memory to update
             time.sleep(0.1)
             
         print(f"Completed 360-degree scan. '{target_item}' was not found.")
@@ -171,11 +159,9 @@ class RobotExecutor:
             print("Executor received an empty command.")
             return False
 
-        # Normalize the command (lowercase and strip spaces/underscores)
         normalized_cmd = str(command).strip().lower().replace(" ", "_")
         print(f"Executor running: '{command}' (normalized: '{normalized_cmd}') on target: '{target_item}'")
 
-        # 1. Alias Maps
         detect_aliases = {
             "detect_item", "detect_object", "find_object", "find_item", 
             "search_object", "search_item", "locate_object", "locate_item"
@@ -196,7 +182,6 @@ class RobotExecutor:
             "place_item", "place_object", "deposit_item", "deposit_object"
         }
 
-        # 2. Routing logic matching aliases
         if normalized_cmd in detect_aliases:
             return self._scan_360_for_object(target_item)
             
@@ -213,6 +198,5 @@ class RobotExecutor:
         elif normalized_cmd in put_aliases:
             return self._put_object(target_item)
             
-        # Fallback error handling
-        print(f"⚠️ Unrecognized execution command keyword: '{command}'")
+        print(f"Unrecognized execution command keyword: '{command}'")
         return False
