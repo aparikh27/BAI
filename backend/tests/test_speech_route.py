@@ -3,7 +3,7 @@ import json
 from fastapi.testclient import TestClient
 
 from backend.api import speech_api
-from main import app
+from backend.main import app
 
 
 def test_speech_stream_route_registered():
