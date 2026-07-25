@@ -11,15 +11,16 @@ from backend.features.memory import World, WorldObject
 
 class DetectorService:
 
-    def __init__(self, webots_driver=None):
+    def __init__(self, webots_driver=None, world: World | None = None):
         """
         Initialize detection service.
-        
+
         :param webots_driver: Optional WebotDriver instance to use robot camera instead of local webcam.
+        :param world: Shared ``World`` instance (same object the Executor agent reads).
         """
         self.detector = YOLODetector()
         self.camera = CameraService(webots_driver=webots_driver)
-        self.world = World()
+        self.world = world if world is not None else World()
         self.running = False
         self.thread = None
         self.lock = threading.Lock()

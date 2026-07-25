@@ -1,101 +1,110 @@
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
-from backend.features.audio import ContinuousAudioStream
+"""
+speech_api.py — Voice command SSE endpoint
+─────────────────────────────────────────────
+Captures microphone audio, routes transcription / planning / execution
+through the central ``Coordinator`` message bus.  No direct agent coupling.
+"""
+
 import json
 import queue
 import threading
-from backend.brain.brain_qwen import QWENBRAIN
-from backend.robot_execution.execution_logic import RobotExecutor
+
+import backend.agents_bootstrap  # noqa: F401 — agents submodule on sys.path
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from messaging import Message, MessageStatus, MessageType
+
+from backend.features.audio import ContinuousAudioStream
 
 speech_router = APIRouter()
-brain = None
-brain_lock = threading.Lock()
-robot_executor = None
-robot_executor_lock = threading.Lock()
+
+_coordinator = None
+_coordinator_lock = threading.Lock()
 
 
-def get_speech_components():
-    global brain
-    # Capture state belongs to a single browser connection. Reusing an old
-    # InputStream causes reconnects to compete for the same microphone.
-    if brain is None:
-        brain = QWENBRAIN()
-    return ContinuousAudioStream(chunk_duration=3), brain
+def set_coordinator(coordinator) -> None:
+    """Called once from ``main.py`` lifespan to wire the message bus."""
+    global _coordinator
+    with _coordinator_lock:
+        _coordinator = coordinator
 
 
-def set_robot_executor(executor: RobotExecutor | None):
-    global robot_executor
-    with robot_executor_lock:
-        robot_executor = executor
+def _get_coordinator():
+    with _coordinator_lock:
+        return _coordinator
 
 
-def _dispatch_robot_command(command: str):
-    if not command or command == "[]" or command == "No robot command detected.":
-        print(f"[SPEECH-API] Skipping empty command: {repr(command)}")
-        return
+def _dispatch(coordinator, receiver: str, action: str, payload: dict) -> Message:
+    """Send a single request through ``Coordinator.dispatch``."""
+    return coordinator.dispatch(
+        Message(
+            sender="speech_api",
+            receiver=receiver,
+            action=action,
+            payload=dict(payload),
+            status=MessageStatus.PENDING,
+            message_type=MessageType.REQUEST,
+        )
+    )
 
-    print(f"[SPEECH-API] Attempting to dispatch robot command: {repr(command)}")
-    
-    try:
-        plan = json.loads(command)
-    except json.JSONDecodeError:
-        print(f"[SPEECH-API] Failed to parse command as JSON: {repr(command)}")
-        return
 
-    if not isinstance(plan, list):
-        print(f"[SPEECH-API] Command is not a list, got: {type(plan)}")
-        return
+def _merge_payload(base: dict, response: Message) -> dict:
+    """Accumulate context from an agent response into the running payload."""
+    merged = dict(base)
+    if isinstance(response.payload, dict):
+        merged.update(response.payload)
+    return merged
 
-    with robot_executor_lock:
-        executor = robot_executor
 
-    if executor is None:
-        print("[SPEECH-API] ERROR: Robot executor is None! Not wired to main.py lifespan.")
-        return
-
-    print(f"[SPEECH-API] Executor available. Processing {len(plan)} command steps...")
-
-    for step in plan:
-        if not isinstance(step, dict):
-            print(f"[SPEECH-API] Skipping non-dict step: {step}")
-            continue
-
-        action = step.get("action") or step.get("command")
-        target = step.get("target") or step.get("target_item")
-        print(f"[SPEECH-API] Executing step: action='{action}', target='{target}'")
-        
-        if action:
-            try:
-                executor.execute_command(action, target)
-                print(f"[SPEECH-API] Step completed successfully: {action}")
-            except Exception as exc:
-                print(f"[SPEECH-API] Robot execution error: {exc}")
+def _format_command(plan) -> str:
+    if not plan:
+        return "No robot command detected."
+    return json.dumps(plan)
 
 
 @speech_router.get("/stream-speech")
 async def stream_speech():
-    streamer_instance, brain_instance = get_speech_components()
+    coordinator = _get_coordinator()
+    if coordinator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Coordinator is not initialized. Is Webots connected?",
+        )
+
+    streamer = ContinuousAudioStream(chunk_duration=3)
 
     def audio_generator():
         stop_event = threading.Event()
-        events = queue.Queue()
-        command_queue = queue.Queue()
+        events: queue.Queue = queue.Queue()
+        command_queue: queue.Queue = queue.Queue()
         sentinel = object()
         transcription_complete = object()
         command_complete = object()
 
         def transcribe():
             try:
-                for transcript in streamer_instance.stream_and_transcribe(stop_event=stop_event):
+                for audio_block in streamer.stream_audio(stop_event=stop_event):
                     if stop_event.is_set():
                         break
-                    if transcript.strip():
-                        # Transcription is sent immediately; Qwen inference must
-                        # never block the microphone capture loop.
-                        events.put({"transcript": transcript})
-                        command_queue.put(transcript)
+
+                    response = _dispatch(
+                        coordinator,
+                        receiver="Audio",
+                        action="transcribe",
+                        payload={"audio_data": audio_block},
+                    )
+
+                    if response.status != MessageStatus.SUCCESS:
+                        if response.error:
+                            print(f"[SPEECH-API] Transcription error: {response.error}")
+                        continue
+
+                    text = response.payload.get("text", "").strip()
+                    if text:
+                        events.put({"transcript": text})
+                        command_queue.put(_merge_payload({}, response))
             except Exception as exc:
-                print(f"Speech transcription error: {exc}")
+                print(f"[SPEECH-API] Speech capture error: {exc}")
             finally:
                 command_queue.put(sentinel)
                 events.put(transcription_complete)
@@ -104,26 +113,51 @@ async def stream_speech():
             try:
                 while not stop_event.is_set():
                     try:
-                        transcript = command_queue.get(timeout=0.2)
+                        payload = command_queue.get(timeout=0.2)
                     except queue.Empty:
                         continue
-                    if transcript is sentinel:
+
+                    if payload is sentinel:
                         break
 
                     try:
-                        # A reconnect can overlap an in-flight request. Llama's
-                        # model instance is shared, so only inference is
-                        # serialized; microphone capture remains continuous.
-                        with brain_lock:
-                            command = brain_instance.process_task(transcript)
+                        planner_response = _dispatch(
+                            coordinator,
+                            receiver="Planner",
+                            action="create_plan",
+                            payload=payload,
+                        )
                     except Exception as exc:
-                        print(f"Speech command processing error: {exc}")
-                        command = ""
+                        print(f"[SPEECH-API] Planner dispatch error: {exc}")
+                        continue
 
-                    if not command or command == "[]":
-                        command = "No robot command detected."
-                    events.put({"command": command})
-                    _dispatch_robot_command(command)
+                    plan = planner_response.payload.get("plan", [])
+                    events.put({"command": _format_command(plan)})
+
+                    if (
+                        planner_response.status != MessageStatus.SUCCESS
+                        or not plan
+                    ):
+                        if planner_response.error:
+                            print(f"[SPEECH-API] Planner error: {planner_response.error}")
+                        continue
+
+                    executor_payload = _merge_payload(payload, planner_response)
+                    try:
+                        executor_response = _dispatch(
+                            coordinator,
+                            receiver="Executor",
+                            action="execute",
+                            payload=executor_payload,
+                        )
+                    except Exception as exc:
+                        print(f"[SPEECH-API] Executor dispatch error: {exc}")
+                        continue
+
+                    if executor_response.status != MessageStatus.SUCCESS:
+                        print(
+                            f"[SPEECH-API] Execution error: {executor_response.error}"
+                        )
             finally:
                 events.put(command_complete)
 
@@ -137,7 +171,6 @@ async def stream_speech():
                 try:
                     event = events.get(timeout=15)
                 except queue.Empty:
-                    # Keep the SSE connection alive during silence.
                     yield ": keep-alive\n\n"
                     continue
 
@@ -151,11 +184,11 @@ async def stream_speech():
             stop_event.set()
 
     return StreamingResponse(
-        audio_generator(), 
+        audio_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "X-Accel-Buffering": "no",
+        },
     )
