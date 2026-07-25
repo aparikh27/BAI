@@ -1,3 +1,6 @@
 [submodule "MemoryEngine"]
 	path = MemoryEngine
 	url = https://github.com/aparikh27/MemoryEngine
+[submodule "agents"]
+	path = agents
+	url = https://github.com/aparikh27/agents.git

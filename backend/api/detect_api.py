@@ -1,30 +1,93 @@
-import json
+"""
+detect_api.py — Vision streaming & robot command endpoints
+───────────────────────────────────────────────────────────
+``DetectorService`` handles continuous YOLO perception for the UI.
+Robot actions route through ``Coordinator.dispatch`` to the Executor agent.
+"""
+
 import time
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException, Request  # Added Request
+import backend.agents_bootstrap  # noqa: F401 — agents submodule on sys.path
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from messaging import Message, MessageStatus, MessageType
 from pydantic import BaseModel, Field
 
-from backend.features.detect import DetectorService
 from backend.features.audio import Audio
+from backend.features.detect import DetectorService
+from backend.features.memory import World
 
 detect_router = APIRouter()
-detector_service = DetectorService()
+
+_coordinator = None
+detector_service: DetectorService | None = None
 audio_recorder = Audio(duration=1.5)
+
+
+def set_coordinator(coordinator) -> None:
+    """Called once from ``main.py`` lifespan to wire the message bus."""
+    global _coordinator
+    _coordinator = coordinator
+
+
+def _get_detector_service(app) -> DetectorService:
+    """Lazy-init ``DetectorService`` bound to the shared app ``World``."""
+    global detector_service
+
+    world = getattr(app.state, "world", None)
+    driver = getattr(app.state, "robot_driver", None)
+
+    if detector_service is None:
+        detector_service = DetectorService(
+            webots_driver=driver,
+            world=world if isinstance(world, World) else None,
+        )
+    else:
+        if isinstance(world, World):
+            detector_service.world = world
+        if driver is not None:
+            detector_service.camera.webots_driver = driver
+            detector_service.camera.use_webots = True
+
+    return detector_service
+
+
+def _dispatch_executor(coordinator, command: str, target_id: str) -> Message:
+    """Route a single robot action through the Executor agent."""
+    return coordinator.dispatch(
+        Message(
+            sender="detect_api",
+            receiver="Executor",
+            action="execute",
+            payload={
+                "action": command,
+                "target": target_id,
+            },
+            status=MessageStatus.PENDING,
+            message_type=MessageType.REQUEST,
+        )
+    )
+
 
 class DetectRequest(BaseModel):
     source: str | int
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
-# 1. New Request Schema for your React Frontend to trigger the robot
-class RobotCommandRequest(BaseModel):
-    command: str  # e.g., "get_object", "put_object"
-    target_id: str  # The track ID string from YOLO
 
-@detect_router.post('/detect')
-async def detect(request: Request, detect_req: DetectRequest):  # Added FastAPI Request parameter
-    started = detector_service.start(
+class RobotCommandRequest(BaseModel):
+    command: str
+    target_id: str
+
+
+@detect_router.post("/detect")
+async def detect(request: Request, detect_req: DetectRequest):
+    coordinator = getattr(request.app.state, "coordinator", None) or _coordinator
+    if coordinator is None:
+        raise HTTPException(status_code=503, detail="Coordinator is not initialized.")
+
+    service = _get_detector_service(request.app)
+    started = service.start(
         source=detect_req.source,
         confidence=detect_req.confidence,
     )
@@ -32,87 +95,83 @@ async def detect(request: Request, detect_req: DetectRequest):  # Added FastAPI 
     if not started:
         return {"status": "Detection already running"}
 
-    # Link World Memory and Robot Camera! 
-    if hasattr(request.app.state, "robot_executor"):
-        app_state = request.app.state.robot_executor
-        if "executor" in app_state:
-            # Override the executor's world reference with this endpoint's live world tracker
-            app_state["executor"].world = detector_service.world
-            print("[LINK] Connected Robot Executor memory to the active YOLO Detector World!")
-        
-        # Wire the robot camera to the detector's camera service
-        if app_state.get("executor") and hasattr(app_state["executor"], "robot"):
-            robot_driver = app_state["executor"].robot
-            detector_service.camera.webots_driver = robot_driver
-            detector_service.camera.use_webots = True
-            print("[CAMERA] Wired Webots robot camera to DetectorService (replacing local webcam)")
+    driver = getattr(request.app.state, "robot_driver", None)
+    if driver is not None:
+        service.camera.webots_driver = driver
+        service.camera.use_webots = True
+        print("[CAMERA] Wired Webots robot camera to DetectorService")
 
     audio_recorder.start_listening()
     return {"status": "Detection started"}
 
 
-# 3. New API Endpoint for React to control the robot actions
-@detect_router.post('/execute-robot')
+@detect_router.post("/execute-robot")
 async def execute_robot(request: Request, payload: RobotCommandRequest):
-    """Receives a task command from the React frontend and executes it on the Webots robot."""
-    if not detector_service.running:
-        raise HTTPException(status_code=400, detail="Cannot run robot commands while vision detection is stopped.")
+    coordinator = getattr(request.app.state, "coordinator", None) or _coordinator
+    if coordinator is None:
+        raise HTTPException(status_code=503, detail="Coordinator is not initialized.")
 
-    # Grab the active executor instance from app lifecycle state
-    if not hasattr(request.app.state, "robot_executor") or "executor" not in request.app.state.robot_executor:
-        raise HTTPException(status_code=503, detail="Robot driver is not initialized or connected to Webots.")
+    service = _get_detector_service(request.app)
+    if not service.running:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot run robot commands while vision detection is stopped.",
+        )
 
-    executor = request.app.state.robot_executor["executor"]
+    print(
+        f"⚡ API received request: Action='{payload.command}' "
+        f"on Object ID={payload.target_id}"
+    )
 
-    print(f"⚡ API received request: Action='{payload.command}' on Object ID={payload.target_id}")
-    
-    # Run the visual servoing tracking and navigation loops we built
-    # (Note: This runs synchronously and blocks until the robot returns to origin)
-    success = executor.execute_command(payload.command, payload.target_id)
-    
-    if not success:
-        return {"status": "Execution failed", "success": False}
-        
+    response = _dispatch_executor(coordinator, payload.command, payload.target_id)
+
+    if response.status != MessageStatus.SUCCESS:
+        return {
+            "status": "Execution failed",
+            "success": False,
+            "error": response.error,
+        }
+
     return {"status": "Task successfully executed", "success": True}
 
 
-@detect_router.post('/stopDetect')
+@detect_router.post("/stopDetect")
 async def stopDetect():
-    stopped = detector_service.stop()
-
-    if not stopped:
+    if detector_service is None or not detector_service.running:
         return {"status": "Detection is not running"}
 
+    detector_service.stop()
     audio_recorder.stop_listening()
     return {"status": "Detection stopped"}
 
-@detect_router.get('/video-feed')
-def video_feed():
-    """Streams the MJPEG video feed to the frontend"""
-    if not detector_service.running:
+
+@detect_router.get("/video-feed")
+def video_feed(request: Request):
+    service = _get_detector_service(request.app)
+    if not service.running:
         raise HTTPException(status_code=400, detail="Detection is not running")
 
     def frame_generator():
-        while detector_service.running:
-            frame_bytes = detector_service.get_latest_frame()
-            
+        while service.running:
+            frame_bytes = service.get_latest_frame()
             if frame_bytes:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+                )
             time.sleep(0.03)
 
     return StreamingResponse(
-        frame_generator(), 
-        media_type='multipart/x-mixed-replace; boundary=frame'
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
-@detect_router.get('/visible-objects')
-def visible_objects():
-    """Returns the list of currently visible objects in the world memory"""
-    if not detector_service.running:
+
+@detect_router.get("/visible-objects")
+def visible_objects(request: Request):
+    service = _get_detector_service(request.app)
+    if not service.running:
         raise HTTPException(status_code=400, detail="Detection is not running")
 
-    visible_objects = detector_service.world.get_visible_objects()
-
-    return {"visible_objects": [asdict(obj) for obj in visible_objects]}
+    visible = service.world.get_visible_objects()
+    return {"visible_objects": [asdict(obj) for obj in visible]}
