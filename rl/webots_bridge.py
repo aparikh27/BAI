@@ -1,4 +1,6 @@
+# backend/rl/webots_bridge.py
 from typing import Dict, List, Optional
+import numpy as np
 
 
 class WebotsBridge:
@@ -8,25 +10,17 @@ class WebotsBridge:
     Responsibilities:
     - Reset the simulation
     - Step the simulation
-    - Send robot commands
-    - Read simulator state
+    - Send robot actions / velocity commands
+    - Read simulator state into self-contained snapshots
     """
 
     def __init__(self, driver, world_model):
         self.driver = driver
         self.world_model = world_model
 
-    # ------------------------------------------------------------------
-    # Simulation Control
-    # ------------------------------------------------------------------
-
     def reset_world(self, random_seed: Optional[int] = None):
-        """
-        Reset the simulation for a new episode.
-        """
-
+        """Reset the simulation for a new episode."""
         if random_seed is not None:
-            import numpy as np
             np.random.seed(random_seed)
 
         # Reset robot pose
@@ -46,12 +40,7 @@ class WebotsBridge:
         self.step()
 
     def randomize_world(self):
-        """
-        Randomize object locations.
-        """
-
-        import numpy as np
-
+        """Randomize object locations."""
         bottle_x = np.random.uniform(0.5, 2.0)
         bottle_y = np.random.uniform(-1.0, 1.0)
 
@@ -62,138 +51,78 @@ class WebotsBridge:
         )
 
     def step(self, duration_ms: int = 100):
-        """
-        Advance Webots simulation.
-        """
+        """Advance Webots simulation."""
         self.driver.step_simulation(duration_ms)
 
-    # ------------------------------------------------------------------
-    # Robot Commands
-    # ------------------------------------------------------------------
+
+    def execute_action(self, action: int):
+        """
+        Translates abstract RL discrete actions into robot-specific velocities.
+        
+        0: MOVE_FORWARD
+        1: TURN_LEFT
+        2: TURN_RIGHT
+        3: STOP
+        """
+        if action == 0:    # MOVE_FORWARD
+            self.move(0.2, 0.0)
+        elif action == 1:  # TURN_LEFT
+            self.move(0.0, 0.5)
+        elif action == 2:  # TURN_RIGHT
+            self.move(0.0, -0.5)
+        elif action == 3:  # STOP
+            self.stop()
+        else:
+            raise ValueError(f"Invalid discrete action index: {action}")
 
     def move(self, linear_velocity: float, angular_velocity: float):
-        """
-        Send velocity command to robot.
-        """
+        """Send velocity command to robot."""
         self.driver.move(
             linear_v=linear_velocity,
             angular_v=angular_velocity,
         )
 
     def stop(self):
-        """
-        Stop robot.
-        """
+        """Stop robot."""
         self.move(0.0, 0.0)
 
-    # ------------------------------------------------------------------
-    # Robot State
-    # ------------------------------------------------------------------
 
     def get_robot_pose(self):
-        """
-        Returns:
-            (x, y, heading)
-        """
+        """Returns: (x, y, heading)"""
         return self.driver.get_robot_pose()
 
     def get_robot_velocity(self):
-        """
-        Optional.
-        """
+        """Optional velocity retrieval."""
         if hasattr(self.driver, "get_robot_velocity"):
             return self.driver.get_robot_velocity()
-
         return None
-
-    # ------------------------------------------------------------------
-    # World State
-    # ------------------------------------------------------------------
 
     def get_object_pose(self, object_name: str):
-        """
-        Returns object pose.
-
-        Example:
-            bottle
-            chair
-            person
-        """
+        """Returns object pose (x, y) if available."""
         return self.driver.get_object_pose(object_name)
 
-    def get_detected_objects(self):
-        """
-        Returns detections from the world model.
-
-        The World Model is the single source of truth for
-        perceived objects.
-        """
-        if hasattr(self.world_model, "get_all_objects"):
-            return self.world_model.get_all_objects()
-
-        return []
-
-    # ------------------------------------------------------------------
-    # Sensors
-    # ------------------------------------------------------------------
-
-    def get_lidar(self):
-        """
-        Returns lidar scan if available.
-        """
-        if hasattr(self.driver, "get_lidar"):
-            return self.driver.get_lidar()
-
-        return None
-
-    def get_camera_image(self):
-        """
-        Optional camera image.
-        RL will probably never use this directly.
-        """
-        if hasattr(self.driver, "get_camera_image"):
-            return self.driver.get_camera_image()
-
-        return None
-
-    # ------------------------------------------------------------------
-    # Collision
-    # ------------------------------------------------------------------
-
-    def collision_detected(self):
-        """
-        Returns True if robot is colliding.
-        """
+    def collision_detected(self) -> bool:
+        """Returns True if robot is colliding."""
         return self.driver.check_collision()
-
-    # ------------------------------------------------------------------
-    # Generic State Snapshot
-    # ------------------------------------------------------------------
 
     def get_state(self) -> Dict:
         """
         Generic simulator snapshot.
-
-        This is NOT an RL observation.
-
-        ObservationBuilder will convert this into an
-        observation vector later.
+        Contains all ground-truth object and robot data needed for observations.
         """
+        # Collect target object ground-truth pose
+        bottle_pose = self.get_object_pose("bottle")
 
         return {
             "robot_pose": self.get_robot_pose(),
             "robot_velocity": self.get_robot_velocity(),
-            "objects": self.get_detected_objects(),
+            "objects": {
+                "bottle": bottle_pose
+            },
             "collision": self.collision_detected(),
         }
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
-
     def close(self):
-        """
-        Shutdown simulator.
-        """
+        """Shutdown simulator."""
         if hasattr(self.driver, "shutdown"):
             self.driver.shutdown()
