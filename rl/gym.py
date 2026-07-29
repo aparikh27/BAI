@@ -1,4 +1,6 @@
 # backend/rl/gym.py
+from __future__ import annotations
+
 import gymnasium as gym
 from gymnasium import spaces
 
@@ -44,20 +46,18 @@ class BAIEnv(gym.Env):
         self.step_count = 0
         self.previous_distance = None
 
-        # Reset Webots world
-        self.bridge.reset_world(random_seed=seed)
+        if self.bridge is not None:
+            self.bridge.reset_world(random_seed=seed)
 
-        # Get initial state and build observation
-        state = self.bridge.get_state()
+        state = self.bridge.get_state() if self.bridge is not None else {}
         observation = self.obs_builder.build_observation(state)
 
-        # Track target distance index [2] from obs array
         self.previous_distance = float(observation[2])
 
         info = {
             "distance_to_goal": self.previous_distance,
-            "is_collision": bool(state["collision"]),
-            "step": self.step_count
+            "is_collision": bool(state.get("collision", False)),
+            "step": self.step_count,
         }
 
         return observation, info
@@ -66,34 +66,30 @@ class BAIEnv(gym.Env):
         """Execute one step in the environment."""
         self.step_count += 1
 
-        # 1. Dispatch action to bridge and step simulator
-        self.bridge.execute_action(action)
-        self.bridge.step(duration_ms=100)
+        if self.bridge is not None:
+            self.bridge.execute_action(action)
+            self.bridge.step(duration_ms=100)
 
-        # 2. Get state and build observation
-        state = self.bridge.get_state()
+        state = self.bridge.get_state() if self.bridge is not None else {}
         observation = self.obs_builder.build_observation(state)
 
         current_distance = float(observation[2])
         is_collision = bool(observation[4])
 
-        # 3. Compute reward & termination via RewardEngine
         reward, terminated = self.reward_engine.compute_reward_and_termination(
             current_distance=current_distance,
             is_collision=is_collision,
-            previous_distance=self.previous_distance
+            previous_distance=self.previous_distance,
         )
 
-        # 4. Check step truncation limit
         truncated = self.step_count >= self.max_steps
 
-        # Update distance memory for next delta calculation
         self.previous_distance = current_distance
 
         info = {
             "distance_to_goal": current_distance,
             "is_collision": is_collision,
-            "step": self.step_count
+            "step": self.step_count,
         }
 
         return observation, reward, terminated, truncated, info

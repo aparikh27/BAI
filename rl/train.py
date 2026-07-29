@@ -1,7 +1,9 @@
 # backend/rl/train.py
 import os
+from pathlib import Path
+
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 
 from rl.gym import BAIEnv
@@ -9,17 +11,17 @@ from rl.webots_bridge import WebotsBridge
 from rl.Observations import ObservationBuilder
 from rl.rewards import RewardEngine
 
-# Import your actual Webots Driver and World Model instances here
-# from robot.driver import WebotsDriver
-# from world.world_model import WorldModel
+from backend.robot_execution.webot import WebotDriver
+from backend.features.memory import World
 
 
 def train():
     # ------------------------------------------------------------------
     # 1. Setup Logging & Checkpoint Directories
     # ------------------------------------------------------------------
-    log_dir = "./logs/ppo_navigation/"
-    model_dir = "./models/ppo_navigation/"
+    workspace_root = Path(__file__).resolve().parents[1]
+    log_dir = str(workspace_root / "logs" / "ppo_navigation")
+    model_dir = str(workspace_root / "models" / "ppo_navigation")
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
@@ -28,13 +30,20 @@ def train():
     # ------------------------------------------------------------------
     # 2. Instantiate Bridge & Environment
     # ------------------------------------------------------------------
-    # driver = WebotsDriver()
-    # world_model = WorldModel()
-    
-    # Replace mock driver/world_model with your actual instances
+    try:
+        from controller import Robot
+
+        robot_instance = Robot()
+        driver = WebotDriver(robot_instance)
+        driver.initialize_devices()
+        world_model = World()
+    except Exception as exc:  # pragma: no cover - runtime fallback
+        print(f"Webots runtime unavailable, using placeholder objects: {exc}")
+        driver = None
+        world_model = None
+
     bridge = WebotsBridge(driver=driver, world_model=world_model)
-    
-    # Custom ObservationBuilder and RewardEngine can be passed if needed
+
     obs_builder = ObservationBuilder(target_name="bottle")
     reward_engine = RewardEngine(goal_threshold=0.15)
 
@@ -42,7 +51,7 @@ def train():
         bridge=bridge,
         obs_builder=obs_builder,
         reward_engine=reward_engine,
-        max_steps=300
+        max_steps=300,
     )
 
     # Wrap with Gym Monitor to record episode reward and length statistics

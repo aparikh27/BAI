@@ -70,6 +70,19 @@ def test_observation_builder_missing_target_fallback():
     assert dy == pytest.approx(-1.0)
 
 
+def test_observation_builder_handles_missing_or_invalid_state():
+    builder = ObservationBuilder(target_name="bottle")
+
+    obs = builder.build_observation(None)
+    assert obs.shape == (5,)
+    assert obs.dtype == np.float32
+    assert np.isfinite(obs).all()
+
+    obs = builder.build_observation({"robot_pose": None, "objects": {}, "collision": False})
+    assert obs.shape == (5,)
+    assert np.isfinite(obs).all()
+
+
 # ----------------------------------------------------------------------
 # 2. Tests for RewardEngine
 # ----------------------------------------------------------------------
@@ -118,6 +131,20 @@ def test_reward_engine_terminal_collision():
     assert terminated is True
 
 
+def test_reward_engine_handles_non_finite_values():
+    engine = RewardEngine(goal_threshold=0.15)
+
+    reward, terminated = engine.compute_reward_and_termination(
+        current_distance=float("nan"),
+        is_collision=False,
+        previous_distance=None
+    )
+
+    assert isinstance(reward, float)
+    assert terminated is False
+    assert np.isfinite(reward)
+
+
 # ----------------------------------------------------------------------
 # 3. Tests for WebotsBridge Action Dispatch
 # ----------------------------------------------------------------------
@@ -138,6 +165,37 @@ def test_webots_bridge_execute_action():
     # Invalid action
     with pytest.raises(ValueError):
         bridge.execute_action(99)
+
+
+def test_webots_bridge_supports_webotdriver_style_interface():
+    class WebotDriverStyle:
+        def __init__(self):
+            self.calls = []
+
+        def get_position(self):
+            return (1.5, -0.5)
+
+        def get_angle(self):
+            return 0.25
+
+        def check_collision(self):
+            return True
+
+        def step_simulation(self, duration_ms):
+            self.calls.append(duration_ms)
+
+        def move(self, linear_v, angular_v):
+            self.calls.append((linear_v, angular_v))
+
+    driver = WebotDriverStyle()
+    bridge = WebotsBridge(driver=driver, world_model=None)
+
+    pose = bridge.get_robot_pose()
+    assert pose == pytest.approx((1.5, -0.5, 0.25))
+
+    assert bridge.check_collision() is True
+    bridge.step_simulation(120)
+    assert driver.calls[-1] == 120
 
 
 # ----------------------------------------------------------------------
