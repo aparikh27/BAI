@@ -81,10 +81,19 @@ class WebotsBridge:
             self.driver.move(linear_v=linear_velocity, angular_v=angular_velocity)
         elif hasattr(self.driver, "set_velocity"):
             self.driver.set_velocity(linear_velocity, angular_velocity)
+        elif angular_velocity == 0.0 and linear_velocity > 0.0 and hasattr(self.driver, "move_forward"):
+            # Legacy drivers expose a blocking distance primitive instead of
+            # velocity control.  Keep the fallback small and explicit.
+            self.driver.move_forward(linear_velocity * 0.1)
+        elif linear_velocity == 0.0 and angular_velocity != 0.0 and hasattr(self.driver, "turn"):
+            self.driver.turn(-angular_velocity * 6.0)
 
     def stop(self):
         """Stop robot."""
-        self.move(0.0, 0.0)
+        if hasattr(self.driver, "stop"):
+            self.driver.stop()
+        else:
+            self.move(0.0, 0.0)
 
     def get_robot_pose(self):
         """Returns: (x, y, heading)."""
