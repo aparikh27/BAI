@@ -1,5 +1,7 @@
 # backend/rl/rewards.py
-from typing import Tuple, Dict, Any
+from __future__ import annotations
+
+from typing import Tuple
 
 
 class RewardEngine:
@@ -11,10 +13,10 @@ class RewardEngine:
         self.goal_threshold = goal_threshold
 
     def compute_reward_and_termination(
-        self, 
-        current_distance: float, 
-        is_collision: bool, 
-        previous_distance: float = None
+        self,
+        current_distance: float,
+        is_collision: bool,
+        previous_distance: float | None = None,
     ) -> Tuple[float, bool]:
         """
         Computes step reward and checks if episode is terminated (success or collision).
@@ -25,22 +27,39 @@ class RewardEngine:
         """
         terminated = False
 
-        # 1. Base step penalty (discourages spinning/idling)
+        try:
+            current_distance_value = float(current_distance)
+        except (TypeError, ValueError):
+            current_distance_value = float("nan")
+
+        try:
+            previous_distance_value = float(previous_distance) if previous_distance is not None else None
+        except (TypeError, ValueError):
+            previous_distance_value = None
+
+        if not self._is_finite(current_distance_value):
+            current_distance_value = 0.0
+            reward = -0.05
+            if bool(is_collision):
+                reward -= 25.0
+                terminated = True
+            return float(reward), bool(terminated)
+
         reward = -0.05
 
-        # 2. Distance Shaping (reward moving closer, penalize drifting away)
-        if previous_distance is not None:
-            distance_delta = previous_distance - current_distance
+        if previous_distance_value is not None and self._is_finite(previous_distance_value):
+            distance_delta = previous_distance_value - current_distance_value
             reward += distance_delta * 10.0
 
-        # 3. Terminal Success
-        if current_distance < self.goal_threshold:
+        if current_distance_value < self.goal_threshold:
             reward += 100.0
             terminated = True
-
-        # 4. Terminal Collision
-        elif is_collision:
+        elif bool(is_collision):
             reward -= 25.0
             terminated = True
 
-        return reward, terminated
+        return float(reward), bool(terminated)
+
+    @staticmethod
+    def _is_finite(value: float) -> bool:
+        return value == value and value not in (float("inf"), float("-inf"))

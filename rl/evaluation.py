@@ -1,16 +1,41 @@
 # backend/rl/evaluate.py
 import time
+from pathlib import Path
+
 from stable_baselines3 import PPO
+
 from rl.gym import BAIEnv
 from rl.webots_bridge import WebotsBridge
+from rl.Observations import ObservationBuilder
+from rl.rewards import RewardEngine
+from backend.robot_execution.webot import WebotDriver
+from backend.features.memory import World
+
 
 def evaluate():
-    # Load environment
-    bridge = WebotsBridge(driver=driver, world_model=world_model)
-    env = BAIEnv(bridge=bridge)
+    workspace_root = Path(__file__).resolve().parents[1]
+    model_path = workspace_root / "models" / "ppo_navigation" / "ppo_bottle_navigator_final"
 
-    # Load trained model
-    model = PPO.load("models/ppo_navigation/ppo_bottle_navigator_final")
+    try:
+        from controller import Robot
+
+        robot_instance = Robot()
+        driver = WebotDriver(robot_instance)
+        driver.initialize_devices()
+        world_model = World()
+    except Exception as exc:  # pragma: no cover - runtime fallback
+        print(f"Webots runtime unavailable, using placeholder objects: {exc}")
+        driver = None
+        world_model = None
+
+    bridge = WebotsBridge(driver=driver, world_model=world_model)
+    env = BAIEnv(
+        bridge=bridge,
+        obs_builder=ObservationBuilder(target_name="bottle"),
+        reward_engine=RewardEngine(goal_threshold=0.15),
+    )
+
+    model = PPO.load(model_path)
 
     obs, info = env.reset()
     done = False
