@@ -1,5 +1,6 @@
 # backend/rl/train.py
 import os
+import argparse
 from pathlib import Path
 
 from stable_baselines3 import PPO
@@ -15,15 +16,16 @@ from backend.robot_execution.webot import WebotDriver
 from backend.features.memory import World
 
 
-def train():
+def train(total_timesteps: int = 100_000, dry_run: bool = False):
     # ------------------------------------------------------------------
     # 1. Setup Logging & Checkpoint Directories
     # ------------------------------------------------------------------
     workspace_root = Path(__file__).resolve().parents[1]
     log_dir = str(workspace_root / "logs" / "ppo_navigation")
     model_dir = str(workspace_root / "models" / "ppo_navigation")
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+    if not dry_run:
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
 
     print("Initializing Webots Bridge & Environment...")
 
@@ -53,6 +55,21 @@ def train():
         reward_engine=reward_engine,
         max_steps=300,
     )
+
+    if dry_run:
+        try:
+            observation, info = raw_env.reset(seed=0)
+            _, reward, terminated, truncated, _ = raw_env.step(
+                raw_env.action_space.sample()
+            )
+            print(
+                "Dry run complete: "
+                f"observation_shape={observation.shape}, reward={reward:.3f}, "
+                f"terminated={terminated}, truncated={truncated}, info={info}"
+            )
+        finally:
+            raw_env.close()
+        return
 
     # Wrap with Gym Monitor to record episode reward and length statistics
     env = Monitor(raw_env, filename=os.path.join(log_dir, "monitor.csv"))
@@ -89,7 +106,6 @@ def train():
     # ------------------------------------------------------------------
     # 5. Launch Training
     # ------------------------------------------------------------------
-    total_timesteps = 100_000
     print(f"Starting training for {total_timesteps} timesteps...")
     
     try:
@@ -113,4 +129,12 @@ def train():
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train the PPO navigation agent.")
+    parser.add_argument("--timesteps", type=int, default=100_000)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Construct and exercise one environment step without training or writing a model.",
+    )
+    args = parser.parse_args()
+    train(total_timesteps=args.timesteps, dry_run=args.dry_run)

@@ -97,6 +97,26 @@ class WebotDriver(RobotInterface):
             if self.robot.step(self.time_step) == -1:
                 break
         self.stop()
+
+    def move(self, linear_v: float, angular_v: float):
+        """Set non-blocking differential-drive velocities for the RL bridge.
+
+        ``WebotsBridge`` advances simulation time separately, so this method
+        deliberately does not call ``robot.step`` or block.
+        """
+        if not self.left_motor or not self.right_motor:
+            return
+
+        # The constants match the existing driver speed scale while providing
+        # a stable linear/angular command adapter.
+        linear_speed = float(linear_v) * 12.8 / 0.2
+        turn_speed = float(angular_v) * 2.4 / 0.5
+        self.left_motor.setVelocity(linear_speed - turn_speed)
+        self.right_motor.setVelocity(linear_speed + turn_speed)
+
+    def step_simulation(self, duration_ms: int = 100):
+        """Advance Webots once using the requested RL control interval."""
+        return self.robot.step(int(duration_ms))
         
     def turn(self, angle: float):
         """Rotates in place. Positive angle = Right, Negative = Left."""

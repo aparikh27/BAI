@@ -2,6 +2,7 @@
 import time
 from pathlib import Path
 
+import numpy as np
 from stable_baselines3 import PPO
 
 from rl.gym import BAIEnv
@@ -46,7 +47,11 @@ def evaluate():
     while not done:
         # Predict action (deterministic=True disables exploration noise)
         action, _states = model.predict(obs, deterministic=True)
-        
+        if isinstance(action, np.ndarray):
+            action = int(action.item())
+        elif not isinstance(action, (int, np.integer)):
+            action = int(action)
+
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         done = terminated or truncated

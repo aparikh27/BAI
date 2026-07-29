@@ -14,8 +14,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-# Webots internal imports (enabled by your PYTHONPATH variable)
-from controller import Robot  
+# Webots is available only inside the simulator controller runtime.  Importing
+# the API module must still work for route tests and non-simulator tooling.
+try:
+    from controller import Robot
+except ImportError:  # pragma: no cover - depends on the Webots runtime
+    Robot = None
 
 # ── Agents submodule public API ───────────────────────────────────────────
 from master_planner.coordinator import Coordinator
@@ -49,6 +53,11 @@ async def lifespan(app: FastAPI):
     print("═" * 60)
     print("[BAI] Lifespan Starting — Connecting to Webots Simulator...")
     print("═" * 60)
+
+    if Robot is None:
+        print("[BAI] Webots controller module is unavailable; API is running without robot hardware.")
+        yield
+        return
 
     try:
         # ── Hardware init ─────────────────────────────────────────────
