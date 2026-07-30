@@ -22,7 +22,7 @@ detect_router = APIRouter()
 
 _coordinator = None
 detector_service: DetectorService | None = None
-audio_recorder = Audio(duration=1.5)
+audio_recorder = Audio(duration=1)
 
 
 def set_coordinator(coordinator) -> None:

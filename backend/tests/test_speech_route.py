@@ -66,7 +66,7 @@ class FakeCoordinator:
 
 
 def test_speech_stream_route_registered():
-    router_paths = [route.path for route in speech_api.speech_router.routes]
+    router_paths = [route.url_path_for for route in speech_api.speech_router.routes]
     assert "/stream-speech" in router_paths
 
 
