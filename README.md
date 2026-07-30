@@ -1,418 +1,215 @@
-# BAI: Behavioral Autonomy Infrastructure
+# BAI — AgentCore Robotics Framework
 
-<p align="center">
-  <b>An autonomous robotics platform powered by multi-agent AI, computer vision, speech recognition, memory, and intelligent task planning.</b>
-</p>
+> A multi-agent orchestration and reinforcement-learning framework for robots that need to perceive, reason, remember, and act.
 
----
+BAI (Behavioral Autonomy Infrastructure) brings together AgentCore coordination, YOLO perception, speech and planning agents, a persistent world model, and a Gymnasium-compatible Webots environment. It is a practical foundation for autonomous-robot experiments, not a single hard-wired demo.
 
-## Overview
+## Motivation
 
-BAI (Behavioral Autonomy Infrastructure) is an AI-powered robotics platform designed to enable autonomous robots to perceive, reason, remember, and act within their environment.
+Most robots today are highly capable, but they are still limited by how much we have explicitly programmed them to do. Traditional robotics systems often follow a fixed pipeline:
 
-Unlike traditional robotics systems that rely on tightly coupled modules, BAI is built on top of the **ATLAS Agents Framework**, a modular multi-agent architecture where specialized agents communicate through a standardized messaging protocol.
+Sensor → Perception → Controller → Action
 
-The project combines state-of-the-art AI models with robotics software to create an extensible foundation for intelligent autonomous systems.
+This approach works well for controlled environments, but real-world environments are unpredictable. A robot operating in a home, hospital, warehouse, or disaster zone must handle new situations, incomplete information, and changing goals without requiring every possible scenario to be manually programmed.
 
----
+BAI explores a more adaptive approach by combining perception, reasoning, memory, and learning into a unified architecture:
 
-# Features
+Perception → World Model → Memory → Reasoning → Learning → Action
 
-- 🎥 Real-time object detection and tracking using YOLO
-- 🎙️ Continuous speech recognition using Whisper
-- 🧠 LLM-powered task planning
-- 💾 Persistent short-term and long-term memory engine
-- 🤖 Autonomous robot command execution
-- 🌍 Persistent world model for environment understanding
-- 🔄 Modular multi-agent architecture
-- 📊 Web dashboard for monitoring perception and planning
-- 🛰️ Simulation support (Isaac Sim / Webots)
+The goal of BAI is to move toward robots that do more than simply execute predefined commands. By allowing robots to build an understanding of their environment, learn from experience, and make decisions based on context, we can create systems that are more flexible, reliable, and useful in the real world.
 
----
+This type of adaptability has the potential to enable more capable robotic assistants, improve automation in industries facing labor shortages, support healthcare and elder care, and help robots operate safely in complex environments where human intervention is limited.
 
-# System Architecture
+## System flow
 
 ```text
-                    User
-
-                      │
-
-            Speech / Text Input
-
-                      │
-
-                Audio Agent
-                 (Whisper)
-
-                      │
-
-                      ▼
-
-               Planner Agent
-                 (LLM)
-
-                      │
-
-              Task Pipeline
-
-                      │
-
-                 Coordinator
-         (ATLAS Agents Framework)
-
-      ┌──────────┼───────────┬───────────┐
-      │          │           │           │
-      ▼          ▼           ▼           ▼
-
- Vision      Memory     Execution    Future Agents
-  Agent        Agent        Agent
-
-      │          │           │
-      └──────────┼───────────┘
-                 │
-                 ▼
-
-             World Model
-
-                 │
-                 ▼
-
-        Robot / Simulator
+                      AgentCore Coordinator
+              (message bus, pipelines, agent routing)
+                    /             |             \
+          Vision / YOLO       Planner / LLM    Memory Agent
+                    \             |             /
+                     +------> World Model <----+
+                                  |
+                         WebotsBridge
+                    (real driver or mock driver)
+                                  |
+        +-------------------------+-------------------------+
+        |                                                   |
+     BAIEnv <--- ObservationBuilder                  RewardEngine
+        |          (Gym observation)                 (progress, goal,
+        +--------------------> PPO <----------------- collision rewards)
+                         Stable-Baselines3
 ```
 
----
+## Feature
 
-# Tech Stack
+- PPO navigation training through Stable-Baselines3 and Gymnasium.
+- Webots integration with safe fallback/mock behavior so RL validation can run without a simulator controller.
+- A composable `ObservationBuilder` and custom `RewardEngine` for navigation experiments.
+- AgentCore message routing for vision, audio, planning, execution, and durable memory agents.
+- YOLO/OpenCV perception, Whisper speech transcription, and a FastAPI API surface.
+- Installable Python packages: `agents`, `backend`, `rl`, and `MemoryEngine` work after `pip install -e .`; no `PYTHONPATH` setup is required.
 
-## AI / Machine Learning
+## Demo
 
-- Python
+BAI currently supports:
+
+- Real-time object detection using YOLO
+- Voice commands through Whisper speech recognition
+- LLM-based task planning
+- Persistent world memory
+- Autonomous navigation training through PPO
+- Webots robot simulation
+- React telemetry dashboard
+
+Example task:
+
+User:
+> "Find the bottle"
+
+Pipeline:
+
+Voice → Planner → Vision → Memory → PPO Navigation → Robot Execution
+
+## Quickstart
+
+Prerequisites: Python 3.10–3.13 and Git. Webots is optional for the dry run; when it is not available, BAI uses placeholder driver/world objects.
+
+1. Clone the repository and create an isolated environment.
+
+   ```bash
+   git clone https://github.com/aparikh27/BAI.git
+   cd BAI
+   python -m venv venv
+   ```
+
+2. Activate it.
+
+   ```bash
+   # macOS/Linux
+   source venv/bin/activate
+
+   # Windows PowerShell
+   .\venv\Scripts\Activate.ps1
+   ```
+
+3. Install BAI in editable mode (recommended), or install the runtime/development requirements.
+
+   ```bash
+   pip install --upgrade pip
+   pip install -e .
+   # Alternative, including pytest:
+   # pip install -r requirements.txt
+   ```
+
+### Reinforcement Learning
+1. Validate the RL environment 
+
+   ```bash
+   python -m rl.train --dry-run
+   ```
+
+2. Start PPO training.
+
+   ```bash
+   python -m rl.train --timesteps 100000
+   ```
+
+3. Monitor training.
+
+   ```bash
+   tensorboard --logdir=logs/ppo_navigation
+   ```
+
+4. Run the unit and integration tests.
+
+   ```bash
+   pytest
+   ```
+
+### Live Control
+
+BAI is a **fully functional, interactive voice- and vision-driven robotic personal assistant**. 
+
+You can interact with the robot in real time through spoken commands while observing its perception, reasoning, and physical execution through a live Webots simulation and custom React telemetry dashboard.
+
+```text
+ ┌────────────────┐       Spoken Voice      ┌─────────────────────────┐
+ │   User Voice   ├────────────────────────►│  Whisper Audio Agent    │
+ └────────────────┘                         └────────────┬────────────┘
+                                                         │ Text Command
+                                                         ▼
+ ┌────────────────┐      Telemetry / Video  ┌─────────────────────────┐
+ │ React Dashboard│◄────────────────────────┤  AgentCore Coordinator  │
+ └────────────────┘                         └────────────┬────────────┘
+                                                         │ Action / Intent
+                                                         ▼
+ ┌────────────────┐       Camera Stream     ┌─────────────────────────┐
+ │ Webots 3D World│◄────────────────────────┤ Vision (YOLO) & Planner │
+ └────────────────┘                         └─────────────────────────┘
+ ```
+
+## How to Run
+### 1. Start the FastAPI Backend
+From the project root (with your virtual environment activated):
+
+
+`python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000`
+### 2. Start the frontend
+In a new terminal window
+1. `cd frontend`
+2. `npm install`
+3. `npm run dev`
+
+## Repository layout
+
+```text
+agents/          AgentCore coordinator, messaging, and specialist agents
+backend/         FastAPI routes, perception services, world model, Webots driver
+rl/              BAIEnv, simulator bridge, observations, rewards, PPO scripts
+MemoryEngine/    Standalone short- and long-term memory implementation
+frontend/        React dashboard
+```
+
+## Running with Webots
+
+The RL entry point attempts to import Webots' `controller.Robot` at runtime. Launch it from a configured Webots controller for real simulation interaction. Outside Webots, `python -m rl.train --dry-run` deliberately uses the fallback path, making package and environment validation portable.
+
+## Development notes
+
+- Generated checkpoints belong under `models/` and training telemetry under `logs/`; both are excluded from Git.
+- Local model weights, simulator installations, and credentials should remain outside commits. Use `.env` for local secrets.
+- The `agents` and `MemoryEngine` directories are Git submodules. After cloning, initialize them with:
+
+  ```bash
+  git submodule update --init --recursive
+  ```
+
+## Tech Stack
+
+### AI
 - PyTorch
-- Ultralytics YOLO11
-- Faster-Whisper
-- Qwen (Planner LLM)
-- OpenAI-compatible APIs
+- YOLO
+- Whisper
+- Stable-Baselines3 PPO
+- OpenAI-compatible LLM APIs
 
----
-
-## Multi-Agent Framework
-
-BAI is built on top of the **ATLAS Agents Framework**, providing:
-
-- Standardized agent communication protocol
-- Coordinator / orchestration layer
-- Message-based architecture
-- Pipeline execution
-- Modular agent system
-
----
-
-## Robotics
-
-- ROS2 *(planned)*
-- Isaac Sim *(planned)*
+### Robotics
 - Webots
-- OpenCV
+- Gymnasium
+- ROS2 (planned)
 
----
-
-## Backend
-
+### Backend
+- Python
 - FastAPI
 - WebSockets
-- Server-Sent Events (SSE)
 
----
-
-## Frontend
-
+### Frontend
 - React
 - TypeScript
-- Tailwind CSS
+- TailwindCSS
 
----
 
-## Memory
+## License
 
-- SQLite
-- Custom Memory Engine
-- Short-Term Memory
-- Long-Term Memory
-
----
-
-# Core Components
-
-## Vision Agent
-
-Responsible for understanding the robot's environment.
-
-Capabilities:
-
-- Object detection
-- Multi-object tracking
-- Bounding box generation
-- Object localization
-
-Current implementation:
-
-- YOLO11
-- ByteTrack
-
----
-
-## Audio Agent
-
-Continuously listens for user commands.
-
-Capabilities:
-
-- Speech-to-text
-- Streaming transcription
-- Voice command parsing
-
-Current implementation:
-
-- Faster-Whisper
-
----
-
-## Planner Agent
-
-The cognitive reasoning engine of BAI.
-
-Responsibilities:
-
-- Interpret user goals
-- Break complex objectives into executable tasks
-- Generate execution pipelines
-- Coordinate specialized agents
-
-Current implementation:
-
-- Qwen
-
----
-
-## Memory Agent
-
-Provides persistent memory for the robot.
-
-Features:
-
-- Short-term working memory
-- Long-term persistent storage
-- Automatic memory promotion
-- Memory retrieval
-- Memory updates
-
-Backed by the custom Memory Engine.
-
----
-
-## Execution Agent
-
-Interfaces with the robot or simulator.
-
-Responsibilities:
-
-- Execute movement commands
-- Perform robot actions
-- Interface with robotics APIs
-- Execute planner-generated tasks
-
----
-
-## World Model
-
-The World Model maintains BAI's understanding of its environment.
-
-It continuously updates information received from the Vision Agent and stores:
-
-- tracked objects
-- object positions
-- object identities
-- visibility state
-- spatial relationships
-
-Unlike the Memory Agent, which stores persistent knowledge, the World Model represents the robot's current understanding of the physical world.
-
----
-
-# Memory Architecture
-
-```text
-                 Memory Agent
-
-                       │
-
-                Memory Manager
-
-               ┌───────────────┐
-               │               │
-
-      Short-Term Memory   Long-Term Memory
-
-               │               │
-
-           In-Memory        SQLite
-
-               │               │
-
-               └──────┬────────┘
-
-                      ▼
-
-              Planner Agent
-```
-
----
-
-# Agent Communication
-
-All agents communicate through a standardized message protocol provided by the ATLAS Agents Framework.
-
-```text
-Planner Agent
-
-      │
-
- Message
-
-      │
-
-Coordinator
-
-      │
-
-Vision Agent
-
-      │
-
-Response Message
-
-      │
-
-Planner Agent
-```
-
-This architecture allows components to remain loosely coupled while enabling new agents to be added with minimal changes to the overall system.
-
----
-
-# Current Repository Structure
-
-```text
-BAI/
-
-├── backend/
-│
-├── frontend/
-│
-├── memory_engine/
-│
-├── atlas_agents/
-│
-├── simulations/
-│
-├── docs/
-│
-└── tests/
-```
-
-*(Directory structure subject to change as development continues.)*
-
----
-
-# Installation
-
-```bash
-git clone https://github.com/aparikh27/BAI.git
-cd BAI
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# Development Roadmap
-
-## Phase 1 — Core Infrastructure
-
-- [x] Project initialization
-- [x] FastAPI backend
-- [x] React dashboard
-- [x] Live video streaming
-- [x] YOLO object detection
-- [x] Multi-object tracking
-
----
-
-## Phase 2 — Autonomous Intelligence
-
-- [x] Speech recognition
-- [x] LLM task planner
-- [x] Memory Engine
-- [x] Multi-Agent Framework
-- [ ] Dynamic pipeline generation
-- [ ] Planner improvements
-
----
-
-## Phase 3 — Robotics
-
-- [ ] World model integration
-- [ ] Robot execution engine
-- [ ] Navigation
-- [ ] ROS2 integration
-- [ ] Isaac Sim integration
-- [ ] Webots integration
-
----
-
-## Phase 4 — Advanced AI
-
-- [ ] Semantic memory search
-- [ ] Vision-language models
-- [ ] Self-improving planning
-- [ ] Autonomous exploration
-- [ ] Multi-robot collaboration
-
----
-
-# Future Goals
-
-Planned capabilities include:
-
-- Long-term autonomous operation
-- Semantic world understanding
-- Multi-agent collaboration
-- Multi-robot coordination
-- Natural language interaction
-- Vision-language reasoning
-- Reinforcement learning integration
-- Distributed AI systems
-
----
-
-# Related Project
-
-BAI is built using the **ATLAS Agents Framework**, a reusable multi-agent orchestration framework that provides:
-
-- standardized agent interfaces
-- message protocol
-- coordinator
-- pipeline execution
-- agent orchestration
-
-ATLAS enables BAI to separate perception, reasoning, memory, and execution into independent, modular agents.
-
----
-
-# License
-
-MIT License
+This project is released under the terms of the [MIT License](LICENSE).
