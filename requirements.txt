@@ -1,0 +1,21 @@
+# Core runtime
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+pydantic>=2.6,<3.0
+numpy>=1.26,<3.0
+opencv-python>=4.9,<5.0
+sounddevice>=0.4.6,<1.0
+
+# AI and multi-agent capabilities
+torch>=2.2,<2.7
+ultralytics>=8.2,<9.0
+openai-whisper>=20231117
+llama-cpp-python>=0.2.70,<1.0
+
+# Reinforcement learning
+gymnasium>=0.29,<1.1
+stable-baselines3>=2.3,<3.0
+tensorboard>=2.16,<3.0
+
+# Development and test
+pytest>=8.0,<9.0
