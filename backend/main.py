@@ -7,7 +7,6 @@ concrete agent, and exposes the coordinator to the FastAPI API layer.
 """
 
 # ── 0. Bootstrap the agents submodule (must be first) ────────────────────
-import backend.agents_bootstrap  # noqa: F401  — sys.path side-effect only
 
 # ── Standard / third-party ────────────────────────────────────────────────
 from fastapi import FastAPI
@@ -22,13 +21,13 @@ except ImportError:  # pragma: no cover - depends on the Webots runtime
     Robot = None
 
 # ── Agents submodule public API ───────────────────────────────────────────
-from master_planner.coordinator import Coordinator
-from master_planner.pipeline import PipelineStep
-from agent.audio_agent.whisper_audio import WhisperAudioAgent
-from agent.vision_agent.yolo_vision import YOLOVisionAgent
-from agent.planner_agent.qwen_planner import QwenPlannerAgent
-from agent.execution_agent.webot_execution import WebotsExecutorAgent
-from agent.memory_agent.memory_engine_agent import MemoryEngineAgent
+from agents.master_planner.coordinator import Coordinator
+from agents.master_planner.pipeline import PipelineStep
+from agents.agent.audio_agent.whisper_audio import WhisperAudioAgent
+from agents.agent.vision_agent.yolo_vision import YOLOVisionAgent
+from agents.agent.planner_agent.qwen_planner import QwenPlannerAgent
+from agents.agent.execution_agent.webot_execution import WebotsExecutorAgent
+from agents.agent.memory_agent.memory_engine_agent import MemoryEngineAgent
 
 # ── BAI-specific runtime services (NOT superseded by agents) ──────────────
 from backend.robot_execution.webot import WebotDriver

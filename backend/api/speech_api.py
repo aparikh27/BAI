@@ -9,10 +9,9 @@ import json
 import queue
 import threading
 
-import backend.agents_bootstrap  # noqa: F401 — agents submodule on sys.path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from messaging import Message, MessageStatus, MessageType
+from agents.messaging import Message, MessageStatus, MessageType
 
 from backend.features.audio import ContinuousAudioStream
 
