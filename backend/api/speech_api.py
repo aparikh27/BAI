@@ -1,24 +1,44 @@
 """
 speech_api.py — Voice command SSE endpoint
 ─────────────────────────────────────────────
-Captures microphone audio, routes transcription / planning / execution
-through the central ``Coordinator`` message bus.  No direct agent coupling.
+Streams dashboard telemetry over SSE and routes transcription / planning /
+execution through the central ``Coordinator`` message bus.  No direct agent
+coupling.
+
+Two producers feed the stream:
+
+* the live microphone loop (best-effort — a machine with no capture device
+  still gets a working dashboard), and
+* ``POST /inject-voice``, which replays a recorded clip through the exact same
+  Audio → Planner → Executor path.  Plan steps are dispatched one at a time so
+  the dashboard can report progress and a final completion state rather than
+  waiting on a single opaque call.
 """
 
 import json
+import os
 import queue
 import threading
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from agents.messaging import Message, MessageStatus, MessageType
 
 from backend.features.audio import ContinuousAudioStream
+from backend.features.events import dashboard_events
 
 speech_router = APIRouter()
 
 _coordinator = None
 _coordinator_lock = threading.Lock()
+
+# Set while a recorded clip is being replayed, so ambient microphone chatter
+# cannot overwrite the transcript mid-run.
+_injection_active = threading.Event()
+_injection_lock = threading.Lock()
+
+DEFAULT_DEMO_AUDIO = os.path.join(os.path.dirname(__file__), "..", "Demo.m4a")
 
 
 def set_coordinator(coordinator) -> None:
@@ -61,8 +81,160 @@ def _format_command(plan) -> str:
     return json.dumps(plan)
 
 
-@speech_router.get("/stream-speech")
-async def stream_speech():
+def _describe_step(step: dict) -> str:
+    action = str(step.get("action", "?")).replace("_", " ")
+    target = step.get("target")
+    return f"{action} → {target}" if target else action
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Recorded-clip replay
+# ══════════════════════════════════════════════════════════════════════════
+
+class InjectVoiceRequest(BaseModel):
+    audio_path: str | None = None
+
+
+def _run_voice_pipeline(coordinator, audio_path: str) -> None:
+    """Runs one clip through Audio → Planner → Executor, narrating to the hub."""
+    publish = dashboard_events.publish
+    try:
+        publish({
+            "stage": "transcribing",
+            "transcript": "Transcribing voice command...",
+            "task_state": "running",
+        })
+
+        response = _dispatch(
+            coordinator,
+            receiver="Audio",
+            action="transcribe",
+            payload={"audio_path": audio_path},
+        )
+
+        if response.status != MessageStatus.SUCCESS:
+            publish({
+                "stage": "error",
+                "task_state": "failed",
+                "message": f"Transcription failed: {response.error}",
+            })
+            return
+
+        text = (response.payload.get("text") or "").strip()
+        if not text:
+            publish({
+                "stage": "error",
+                "task_state": "failed",
+                "message": "Transcription returned no speech.",
+            })
+            return
+
+        publish({"stage": "transcribed", "transcript": text, "task_state": "running"})
+
+        # ── Planning ──────────────────────────────────────────────────
+        publish({"stage": "planning", "command": "Planning...", "task_state": "running"})
+
+        planner_response = _dispatch(
+            coordinator,
+            receiver="Planner",
+            action="create_plan",
+            payload=_merge_payload({"text": text}, response),
+        )
+
+        plan = planner_response.payload.get("plan", []) if planner_response.payload else []
+        publish({"stage": "planned", "command": _format_command(plan), "plan": plan})
+
+        if planner_response.status != MessageStatus.SUCCESS or not plan:
+            publish({
+                "stage": "error",
+                "task_state": "failed",
+                "message": planner_response.error or "Planner produced an empty plan.",
+            })
+            return
+
+        # ── Execution, one step at a time so progress is observable ───
+        total = len(plan)
+        for index, step in enumerate(plan):
+            if not isinstance(step, dict):
+                publish({
+                    "stage": "error",
+                    "task_state": "failed",
+                    "message": f"Step {index + 1} is malformed: {step!r}",
+                })
+                return
+
+            publish({
+                "stage": "executing",
+                "task_state": "running",
+                "step_index": index + 1,
+                "step_total": total,
+                "step_label": _describe_step(step),
+                "step_state": "running",
+            })
+
+            try:
+                executor_response = _dispatch(
+                    coordinator,
+                    receiver="Executor",
+                    action="execute",
+                    payload={"step": step},
+                )
+            except Exception as exc:
+                publish({
+                    "stage": "error",
+                    "task_state": "failed",
+                    "message": f"Executor dispatch error: {exc}",
+                })
+                return
+
+            if executor_response.status != MessageStatus.SUCCESS:
+                publish({
+                    "stage": "error",
+                    "task_state": "failed",
+                    "step_index": index + 1,
+                    "step_total": total,
+                    "step_label": _describe_step(step),
+                    "step_state": "failed",
+                    "message": executor_response.error or "Execution failed.",
+                })
+                return
+
+            publish({
+                "stage": "executing",
+                "task_state": "running",
+                "step_index": index + 1,
+                "step_total": total,
+                "step_label": _describe_step(step),
+                "step_state": "done",
+            })
+
+        publish({
+            "stage": "complete",
+            "task_state": "completed",
+            "step_total": total,
+            "message": f"Task completed — {total} step(s) executed.",
+        })
+
+    except Exception as exc:  # pragma: no cover - defensive; keeps the UI honest
+        publish({
+            "stage": "error",
+            "task_state": "failed",
+            "message": f"Unexpected pipeline error: {exc}",
+        })
+    finally:
+        # Terminal state has been broadcast to everyone currently watching;
+        # don't replay it to whoever connects next.
+        dashboard_events.end_run()
+        _injection_active.clear()
+
+
+@speech_router.post("/inject-voice")
+async def inject_voice(payload: InjectVoiceRequest | None = None):
+    """Replays a recorded clip through the live agent pipeline.
+
+    Returns as soon as the run is accepted; progress arrives over
+    ``/stream-speech`` so the dashboard renders it exactly like live speech.
+    """
     coordinator = _get_coordinator()
     if coordinator is None:
         raise HTTPException(
@@ -70,120 +242,132 @@ async def stream_speech():
             detail="Coordinator is not initialized. Is Webots connected?",
         )
 
+    requested = (payload.audio_path if payload else None) or DEFAULT_DEMO_AUDIO
+    audio_path = os.path.abspath(requested)
+
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+
+    with _injection_lock:
+        if _injection_active.is_set():
+            raise HTTPException(status_code=409, detail="A voice command is already running.")
+        _injection_active.set()
+
+    dashboard_events.start_run()
+    threading.Thread(
+        target=_run_voice_pipeline,
+        args=(coordinator, audio_path),
+        daemon=True,
+    ).start()
+
+    return {"status": "Voice command accepted", "audio_path": audio_path}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Live microphone capture (best-effort)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _run_microphone_loop(coordinator, stop_event: threading.Event) -> None:
+    """Transcribes live mic audio into the hub until ``stop_event`` is set.
+
+    Capture hardware is optional: on a machine with no input device this logs
+    once and returns, leaving the SSE stream fully functional for replayed
+    clips.
+    """
     streamer = ContinuousAudioStream(chunk_duration=3)
+    try:
+        for audio_block in streamer.stream_audio(stop_event=stop_event):
+            if stop_event.is_set():
+                break
 
-    def audio_generator():
+            # A replayed clip owns the transcript while it runs.
+            if _injection_active.is_set():
+                continue
+
+            response = _dispatch(
+                coordinator,
+                receiver="Audio",
+                action="transcribe",
+                payload={"audio_data": audio_block},
+            )
+
+            if response.status != MessageStatus.SUCCESS:
+                if response.error:
+                    print(f"[SPEECH-API] Transcription error: {response.error}")
+                continue
+
+            text = (response.payload.get("text") or "").strip()
+            if not text:
+                continue
+
+            dashboard_events.publish({"transcript": text, "source": "microphone"})
+
+            planner_response = _dispatch(
+                coordinator,
+                receiver="Planner",
+                action="create_plan",
+                payload=_merge_payload({"text": text}, response),
+            )
+            plan = planner_response.payload.get("plan", []) if planner_response.payload else []
+            dashboard_events.publish({"command": _format_command(plan), "plan": plan})
+
+            if planner_response.status != MessageStatus.SUCCESS or not plan:
+                continue
+
+            _dispatch(
+                coordinator,
+                receiver="Executor",
+                action="execute",
+                payload=_merge_payload({"text": text}, planner_response),
+            )
+    except Exception as exc:
+        # No microphone is a normal condition here, not a dashboard failure.
+        print(f"[SPEECH-API] Microphone capture unavailable: {exc}")
+        dashboard_events.publish({
+            "microphone": "unavailable",
+            "message": "Microphone unavailable — replayed commands still work.",
+        })
+
+
+@speech_router.get("/stream-speech")
+async def stream_speech(mic: int = 1):
+    coordinator = _get_coordinator()
+    if coordinator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Coordinator is not initialized. Is Webots connected?",
+        )
+
+    def event_generator():
+        subscriber = dashboard_events.subscribe()
         stop_event = threading.Event()
-        events: queue.Queue = queue.Queue()
-        command_queue: queue.Queue = queue.Queue()
-        sentinel = object()
-        transcription_complete = object()
-        command_complete = object()
 
-        def transcribe():
-            try:
-                for audio_block in streamer.stream_audio(stop_event=stop_event):
-                    if stop_event.is_set():
-                        break
+        if mic:
+            threading.Thread(
+                target=_run_microphone_loop,
+                args=(coordinator, stop_event),
+                daemon=True,
+            ).start()
 
-                    response = _dispatch(
-                        coordinator,
-                        receiver="Audio",
-                        action="transcribe",
-                        payload={"audio_data": audio_block},
-                    )
-
-                    if response.status != MessageStatus.SUCCESS:
-                        if response.error:
-                            print(f"[SPEECH-API] Transcription error: {response.error}")
-                        continue
-
-                    text = response.payload.get("text", "").strip()
-                    if text:
-                        events.put({"transcript": text})
-                        command_queue.put(_merge_payload({}, response))
-            except Exception as exc:
-                print(f"[SPEECH-API] Speech capture error: {exc}")
-            finally:
-                command_queue.put(sentinel)
-                events.put(transcription_complete)
-
-        def process_commands():
-            try:
-                while not stop_event.is_set():
-                    try:
-                        payload = command_queue.get(timeout=0.2)
-                    except queue.Empty:
-                        continue
-
-                    if payload is sentinel:
-                        break
-
-                    try:
-                        planner_response = _dispatch(
-                            coordinator,
-                            receiver="Planner",
-                            action="create_plan",
-                            payload=payload,
-                        )
-                    except Exception as exc:
-                        print(f"[SPEECH-API] Planner dispatch error: {exc}")
-                        continue
-
-                    plan = planner_response.payload.get("plan", [])
-                    events.put({"command": _format_command(plan)})
-
-                    if (
-                        planner_response.status != MessageStatus.SUCCESS
-                        or not plan
-                    ):
-                        if planner_response.error:
-                            print(f"[SPEECH-API] Planner error: {planner_response.error}")
-                        continue
-
-                    executor_payload = _merge_payload(payload, planner_response)
-                    try:
-                        executor_response = _dispatch(
-                            coordinator,
-                            receiver="Executor",
-                            action="execute",
-                            payload=executor_payload,
-                        )
-                    except Exception as exc:
-                        print(f"[SPEECH-API] Executor dispatch error: {exc}")
-                        continue
-
-                    if executor_response.status != MessageStatus.SUCCESS:
-                        print(
-                            f"[SPEECH-API] Execution error: {executor_response.error}"
-                        )
-            finally:
-                events.put(command_complete)
-
-        threading.Thread(target=transcribe, daemon=True).start()
-        threading.Thread(target=process_commands, daemon=True).start()
-
-        transcription_done = False
-        command_done = False
         try:
-            while not (transcription_done and command_done):
+            # Announce immediately so the dashboard can flip its telemetry
+            # indicator without waiting on the first spoken word.
+            yield f"data: {json.dumps({'connected': True})}\n\n"
+
+            while True:
                 try:
-                    event = events.get(timeout=15)
+                    event = subscriber.get(timeout=10)
                 except queue.Empty:
                     yield ": keep-alive\n\n"
                     continue
 
-                if event is transcription_complete:
-                    transcription_done = True
-                elif event is command_complete:
-                    command_done = True
-                else:
-                    yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
         finally:
             stop_event.set()
+            dashboard_events.unsubscribe(subscriber)
 
     return StreamingResponse(
-        audio_generator(),
+        event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
