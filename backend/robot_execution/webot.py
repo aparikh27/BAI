@@ -1,4 +1,5 @@
 import math
+import threading
 import time
 from backend.robot_execution.robot_interface import RobotInterface
 
@@ -6,10 +7,18 @@ class WebotDriver(RobotInterface):
     def __init__(self, robot):
         self.robot = robot
         self.time_step = int(self.robot.getBasicTimeStep())
+        # The Webots controller API is not thread-safe, and two threads drive it
+        # concurrently: DetectorService pulls camera frames while the Executor
+        # agent runs motion loops. Serialise every simulation step through this
+        # lock. It is deliberately fine-grained (one step at a time, never a
+        # whole motion loop) so the camera keeps producing frames while the
+        # robot manoeuvres.
+        self.step_lock = threading.RLock()
         
         # Sensors
         self.camera = None
         self.distance_sensor = None
+        self.front_distance_sensors: list = []
         self.gps = None
         self.compass = None
         
@@ -28,10 +37,25 @@ class WebotDriver(RobotInterface):
         if self.camera:
             self.camera.enable(self.time_step)
 
-        # The C code uses "ds0" as the first distance sensor
-        self.distance_sensor = self.robot.getDevice("ds0")
-        if self.distance_sensor:
-            self.distance_sensor.enable(self.time_step)
+        # ds3/ds4 are the front-centre pair (proto translation x=+0.0656,
+        # y=-+0.0155). ds0 sits at (-0.0404, +0.0496) — rear-left — so reading it
+        # as "distance to front" reports empty space whenever the robot is
+        # actually facing its target. The legacy C controller only ever used ds0
+        # as "sensor index 0" while sweeping the whole ring.
+        self.front_distance_sensors = []
+        for sensor_name in ("ds3", "ds4"):
+            sensor = self.robot.getDevice(sensor_name)
+            if sensor:
+                sensor.enable(self.time_step)
+                self.front_distance_sensors.append(sensor)
+
+        if self.front_distance_sensors:
+            self.distance_sensor = self.front_distance_sensors[0]
+        else:  # pragma: no cover - only if the robot lacks the standard ring
+            self.distance_sensor = self.robot.getDevice("ds0")
+            if self.distance_sensor:
+                self.distance_sensor.enable(self.time_step)
+                self.front_distance_sensors = [self.distance_sensor]
 
         # Tracking sensors (Safely handled if not present in your specific .wbt world file)
         self.gps = self.robot.getDevice("gps")
@@ -57,15 +81,111 @@ class WebotDriver(RobotInterface):
         self.arm_motor = self.robot.getDevice("horizontal_motor")
         self.gripper_motor = self.robot.getDevice("finger_motor::left")
 
+    def step(self, duration_ms: int | None = None) -> int:
+        """Advances the simulation by one step under the shared lock."""
+        with self.step_lock:
+            return self.robot.step(int(duration_ms) if duration_ms else self.time_step)
+
+    def read_camera_image(self):
+        """Steps the sim and grabs a camera frame as one atomic operation.
+
+        Returns ``(raw_image, width, height)``, or ``(None, 0, 0)`` when the
+        camera is absent or the simulation has ended.
+        """
+        if not self.camera:
+            return None, 0, 0
+
+        with self.step_lock:
+            if self.robot.step(self.time_step) == -1:
+                return None, 0, 0
+            return (
+                self.camera.getImage(),
+                self.camera.getWidth(),
+                self.camera.getHeight(),
+            )
+
     def get_camera_width(self) -> int:
         if self.camera:
             return self.camera.getWidth()
         return 640  # Sensible default fallback
 
     def get_distance_to_front(self) -> float:
-        if self.distance_sensor:
-            return self.distance_sensor.getValue()
+        """Distance to the nearest obstacle ahead, **in metres**.
+
+        ``DistanceSensor.getValue()`` returns a raw lookup-table reading, not a
+        length: on the Khepera3's infrared sensors that is 3983 at contact down
+        to 7 at the ~0.45 m range limit — i.e. larger means *closer*. Callers
+        (``ExecutorAgent._get_object`` → ``move_forward``) treat the result as
+        metres, so returning the raw value commanded drives thousands of times
+        too long. Invert the sensor's own lookup table instead of hard-coding a
+        conversion, so this stays correct for any sensor or robot.
+
+        Returns 0.0 when nothing is within range, which callers already treat
+        as "no reachable target".
+        """
+        sensors = self.front_distance_sensors or (
+            [self.distance_sensor] if self.distance_sensor else []
+        )
+        if not sensors:
+            return 0.0
+
+        # Nearest obstacle seen by either front sensor.
+        readings = [
+            metres
+            for metres in (self._sensor_metres(sensor) for sensor in sensors)
+            if metres > 0.0
+        ]
+        return min(readings) if readings else 0.0
+
+    def _sensor_metres(self, sensor) -> float:
+        """Convert one distance sensor's raw reading into metres."""
+        raw = sensor.getValue()
+        table = self._distance_lookup(sensor)
+        if not table:
+            return float(raw)
+
+        # table is [(distance, raw), ...] sorted by increasing distance and,
+        # for these IR sensors, decreasing raw value.
+        if raw >= table[0][1]:
+            return float(table[0][0])
+        if raw <= table[-1][1]:
+            # Below the weakest reading: nothing within usable range.
+            return 0.0
+
+        for (d_near, r_near), (d_far, r_far) in zip(table, table[1:]):
+            if r_far <= raw <= r_near:
+                span = r_near - r_far
+                if span <= 0:
+                    return float(d_near)
+                ratio = (r_near - raw) / span
+                return float(d_near + ratio * (d_far - d_near))
+
         return 0.0
+
+    def _distance_lookup(self, sensor) -> list[tuple[float, float]]:
+        """Cached [(distance_m, raw_value)] pairs for one sensor's lookup table."""
+        cache = getattr(self, "_distance_lookup_cache", None)
+        if cache is None:
+            cache = {}
+            self._distance_lookup_cache = cache
+
+        key = id(sensor)
+        if key in cache:
+            return cache[key]
+
+        pairs: list[tuple[float, float]] = []
+        try:
+            # Webots returns a flat [distance, value, noise, ...] triplet list.
+            flat = sensor.getLookupTable()
+            for i in range(0, len(flat) - 2, 3):
+                pairs.append((float(flat[i]), float(flat[i + 1])))
+            pairs.sort(key=lambda p: p[0])
+        except Exception as exc:  # pragma: no cover - depends on the Webots build
+            print(f"[WebotDriver] Could not read distance-sensor lookup table: {exc}")
+            pairs = []
+
+        cache[key] = pairs
+        return pairs
 
     def get_position(self) -> tuple[float, float]:
         """Returns the current (x, y) coordinates of the robot from the GPS."""
@@ -94,7 +214,7 @@ class WebotDriver(RobotInterface):
         start_time = self.robot.getTime()
         
         while self.robot.getTime() - start_time < duration:
-            if self.robot.step(self.time_step) == -1:
+            if self.step() == -1:
                 break
         self.stop()
 
@@ -116,7 +236,7 @@ class WebotDriver(RobotInterface):
 
     def step_simulation(self, duration_ms: int = 100):
         """Advance Webots once using the requested RL control interval."""
-        return self.robot.step(int(duration_ms))
+        return self.step(duration_ms)
         
     def turn(self, angle: float):
         """Rotates in place. Positive angle = Right, Negative = Left."""
@@ -135,7 +255,7 @@ class WebotDriver(RobotInterface):
         start_time = self.robot.getTime()
         
         while self.robot.getTime() - start_time < duration:
-            if self.robot.step(self.time_step) == -1:
+            if self.step() == -1:
                 break
         self.stop()
         
@@ -177,5 +297,5 @@ class WebotDriver(RobotInterface):
         """Helper to pause execution and let mechanical parts finish moving."""
         start = self.robot.getTime()
         while self.robot.getTime() - start < duration:
-            if self.robot.step(self.time_step) == -1:
+            if self.step() == -1:
                 break
