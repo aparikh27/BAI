@@ -220,3 +220,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated demo recordings (raw Playwright capture + rendered mp4)
+recordings/
+
+# Dependencies for the demo recorder script
+scripts/node_modules/
+
+# SQLite WAL sidecars for the world-memory DB
+robot_memory.db-shm
+robot_memory.db-wal
