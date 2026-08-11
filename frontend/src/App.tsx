@@ -1,12 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
 
+type TaskState = "idle" | "running" | "completed" | "failed";
+
 function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isShowingObjects, setIsShowingObjects] = useState<boolean>(false);
   const [visibleObjectsList, setVisibleObjectsList] = useState<any[]>([]);
   const [speechTranscript, setSpeechTranscript] = useState<string>("Waiting for voice command...");
   const [robotCommand, setRobotCommand] = useState<string>("No robot command yet.");
+  const [telemetryConnected, setTelemetryConnected] = useState<boolean>(false);
+  const [taskState, setTaskState] = useState<TaskState>("idle");
+  const [taskMessage, setTaskMessage] = useState<string>("");
+  const [stepLabel, setStepLabel] = useState<string>("");
+  const [stepIndex, setStepIndex] = useState<number>(0);
+  const [stepTotal, setStepTotal] = useState<number>(0);
+  const [streamKey, setStreamKey] = useState<number>(0);
   const pollingRef = useRef<number | null>(null);
   const speechEventSourceRef = useRef<EventSource | null>(null);
 
@@ -32,6 +41,11 @@ function App() {
 
       // 2. If backend successfully started, turn the UI stream on
       if (response.ok) {
+        // Fix the cache-buster once per session. Evaluating Date.now() in the
+        // render body gave the <img> a new src on every re-render, which
+        // aborted the in-flight MJPEG stream and restarted it each time state
+        // changed — visible as flicker, and as ERR_ABORTED in the network log.
+        setStreamKey(Date.now());
         setIsStreaming(true);
         startStreaming();
       }
@@ -49,7 +63,7 @@ function App() {
           "Content-Type": "application/json",
         },
       });
-      
+
       const data = await response.json();
       console.log(data);
 
@@ -60,11 +74,47 @@ function App() {
 
       setSpeechTranscript("Listening stopped.");
       setRobotCommand("No robot command yet.");
+      setTelemetryConnected(false);
+      resetTask();
 
       // 3. Turn the UI stream off
       setIsStreaming(false);
     } catch (error) {
       console.error("Error stopping detection:", error);
+    }
+  };
+
+  const resetTask = () => {
+    setTaskState("idle");
+    setTaskMessage("");
+    setStepLabel("");
+    setStepIndex(0);
+    setStepTotal(0);
+  };
+
+  const runVoiceCommand = async () => {
+    console.log("Injecting recorded voice command...");
+    resetTask();
+    try {
+      const response = await fetch("/api/inject-voice", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      const data = await response.json();
+      console.log(data);
+
+      if (!response.ok) {
+        setTaskState("failed");
+        setTaskMessage(data?.detail ?? "Could not start the voice command.");
+      }
+    } catch (error) {
+      console.error("Error injecting voice command:", error);
+      setTaskState("failed");
+      setTaskMessage("Could not reach the backend to start the voice command.");
     }
   };
 
@@ -87,17 +137,41 @@ function App() {
     setSpeechTranscript("Listening for a voice command...");
     setRobotCommand("Waiting for robot command...");
 
-    const eventSource = new EventSource("/api/stream-speech");
+    // Live microphone capture is on by default. Opening the dashboard with
+    // ?mic=0 streams telemetry without it, so a scripted run cannot be
+    // derailed by ambient room noise being transcribed into a robot command.
+    const micParam = new URLSearchParams(window.location.search).get("mic");
+    const micEnabled = micParam === null ? "1" : micParam;
+    const eventSource = new EventSource(`/api/stream-speech?mic=${encodeURIComponent(micEnabled)}`);
     speechEventSourceRef.current = eventSource;
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        if (data.connected) {
+          setTelemetryConnected(true);
+        }
         if (data.transcript) {
           setSpeechTranscript(data.transcript);
         }
         if (data.command !== undefined) {
           setRobotCommand(data.command);
+        }
+        if (data.step_label) {
+          setStepLabel(data.step_label);
+        }
+        if (typeof data.step_index === "number") {
+          setStepIndex(data.step_index);
+        }
+        if (typeof data.step_total === "number") {
+          setStepTotal(data.step_total);
+        }
+        if (data.task_state) {
+          setTaskState(data.task_state as TaskState);
+        }
+        if (data.message) {
+          setTaskMessage(data.message);
         }
       } catch (error) {
         console.error("Error parsing streaming chunk:", error);
@@ -109,6 +183,7 @@ function App() {
       // EventSource reconnects automatically. Closing it here prevents the
       // dashboard from recovering after a transient backend startup failure.
       if (speechEventSourceRef.current === eventSource) {
+        setTelemetryConnected(false);
         setSpeechTranscript("Speech stream disconnected. Reconnecting...");
       }
     };
@@ -116,7 +191,7 @@ function App() {
     return eventSource;
   };
 
-  
+
   const toggleShowingObjects = () => {
     setIsShowingObjects((prev) => {
       const next = !prev;
@@ -127,7 +202,7 @@ function App() {
     });
   };
 
-  
+
   useEffect(() => {
     if (isShowingObjects) {
       pollingRef.current = window.setInterval(() => {
@@ -157,17 +232,55 @@ function App() {
     };
   }, []);
 
+  const taskBanner: Record<TaskState, { label: string; bg: string; fg: string } | null> = {
+    idle: null,
+    running: { label: "Task Running", bg: "#fef3c7", fg: "#92400e" },
+    completed: { label: "Task Completed", bg: "#dcfce7", fg: "#166534" },
+    failed: { label: "Task Failed", bg: "#fee2e2", fg: "#991b1b" },
+  };
+  const banner = taskBanner[taskState];
+
   return (
     <div style={{ minHeight: "100vh", padding: "24px", fontFamily: "Inter, sans-serif", background: "#f4f7fb", color: "#172033" }}>
       <div style={{ maxWidth: "980px", margin: "0 auto" }}>
-        <div style={{ marginBottom: "20px" }}>
-          <h2 style={{ margin: "0 0 8px", fontSize: "28px", fontWeight: 700 }}>Robot Vision Dashboard</h2>
-          <p style={{ margin: 0, color: "#5f6b82" }}>Monitor live detections with a clean, focused view.</p>
+        <div style={{ marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: "0 0 8px", fontSize: "28px", fontWeight: 700 }}>Robot Vision Dashboard</h2>
+            <p style={{ margin: 0, color: "#5f6b82" }}>Monitor live detections with a clean, focused view.</p>
+          </div>
+          <span
+            data-testid="telemetry-indicator"
+            data-connected={telemetryConnected ? "true" : "false"}
+            style={{
+              padding: "8px 14px",
+              borderRadius: "999px",
+              background: telemetryConnected ? "#dcfce7" : "#f1f5f9",
+              color: telemetryConnected ? "#166534" : "#475569",
+              fontSize: "13px",
+              fontWeight: 600,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span
+              style={{
+                width: "9px",
+                height: "9px",
+                borderRadius: "999px",
+                background: telemetryConnected ? "#16a34a" : "#94a3b8",
+                display: "inline-block",
+              }}
+            />
+            {telemetryConnected ? "Telemetry Connected" : "Telemetry Offline"}
+          </span>
         </div>
 
         <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
           <button
             onClick={detect}
+            data-testid="start-detect"
             style={{
               border: "none",
               borderRadius: "999px",
@@ -183,6 +296,7 @@ function App() {
           </button>
           <button
             onClick={stopDetect}
+            data-testid="stop-detect"
             style={{
               border: "1px solid #d6dce7",
               borderRadius: "999px",
@@ -194,6 +308,23 @@ function App() {
             }}
           >
             Stop Detect
+          </button>
+          <button
+            onClick={runVoiceCommand}
+            data-testid="run-voice-command"
+            disabled={!isStreaming}
+            style={{
+              border: "none",
+              borderRadius: "999px",
+              padding: "10px 18px",
+              background: isStreaming ? "#7c3aed" : "#cbd5e1",
+              color: "white",
+              cursor: isStreaming ? "pointer" : "not-allowed",
+              fontWeight: 600,
+              boxShadow: isStreaming ? "0 6px 16px rgba(124, 58, 237, 0.18)" : "none",
+            }}
+          >
+            Run Voice Command
           </button>
         </div>
         <button className="objects-toggle" onClick={toggleShowingObjects}>
@@ -212,6 +343,7 @@ function App() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
             <h3 style={{ margin: 0, fontSize: "18px" }}>Live Camera Feed</h3>
             <span
+              data-testid="stream-status"
               style={{
                 padding: "6px 10px",
                 borderRadius: "999px",
@@ -227,9 +359,22 @@ function App() {
 
           {isStreaming ? (
             <img
-              src={`/api/video-feed?t=${Date.now()}`}
+              src={`/api/video-feed?t=${streamKey}`}
               alt="Live YOLO Stream"
-              style={{ width: "100%", maxWidth: "100%", borderRadius: "12px", display: "block", background: "#0f172a" }}
+              data-testid="video-feed"
+              // Cap the feed height so the Voice Commands panel — including the
+              // task state — stays above the fold on a 1080p viewport instead
+              // of being pushed off-screen by a tall 4:3 camera image.
+              style={{
+                width: "100%",
+                maxWidth: "100%",
+                maxHeight: "52vh",
+                objectFit: "contain",
+                borderRadius: "12px",
+                display: "block",
+                background: "#0f172a",
+                margin: "0 auto",
+              }}
             />
           ) : (
             <div
@@ -258,11 +403,40 @@ function App() {
             border: "1px solid #e9eef6",
           }}
         >
-          <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>Voice Commands</h3>
-          <p style={{ margin: 0, color: "#475569", lineHeight: 1.5 }}>{speechTranscript}</p>
-          <p style={{ margin: "8px 0 0", color: "#2563eb", lineHeight: 1.5, fontWeight: 600, whiteSpace: "pre-wrap" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>Voice Commands</h3>
+            {banner && (
+              <span
+                data-testid="task-state"
+                data-state={taskState}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "999px",
+                  background: banner.bg,
+                  color: banner.fg,
+                  fontSize: "13px",
+                  fontWeight: 700,
+                }}
+              >
+                {banner.label}
+              </span>
+            )}
+          </div>
+          <p data-testid="transcript" style={{ margin: 0, color: "#475569", lineHeight: 1.5 }}>{speechTranscript}</p>
+          <p data-testid="robot-command" style={{ margin: "8px 0 0", color: "#2563eb", lineHeight: 1.5, fontWeight: 600, whiteSpace: "pre-wrap" }}>
             Robot Command: {robotCommand}
           </p>
+          {stepTotal > 0 && (
+            <p data-testid="step-progress" style={{ margin: "8px 0 0", color: "#475569", lineHeight: 1.5 }}>
+              Step {stepIndex} of {stepTotal}
+              {stepLabel ? ` — ${stepLabel}` : ""}
+            </p>
+          )}
+          {taskMessage && (
+            <p data-testid="task-message" style={{ margin: "8px 0 0", color: taskState === "failed" ? "#991b1b" : "#166534", lineHeight: 1.5 }}>
+              {taskMessage}
+            </p>
+          )}
         </div>
         {isShowingObjects && (
           <div className="objects-panel">
