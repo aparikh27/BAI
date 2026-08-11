@@ -230,3 +230,6 @@ scripts/node_modules/
 # SQLite WAL sidecars for the world-memory DB
 robot_memory.db-shm
 robot_memory.db-wal
+
+# Vendored Claude Code skill (third-party: github.com/splitbrain/ndemo)
+.claude/skills/ndemo/
