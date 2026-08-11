@@ -66,12 +66,14 @@ class FakeCoordinator:
 
 
 def test_speech_stream_route_registered():
-    router_paths = [route.path for route in speech_api.speech_router.routes]
+    
+    router_paths = [route.url_path_for for route in speech_api.speech_router.routes]
     assert "/stream-speech" in router_paths
 
 
 def test_speech_stream_emits_sse_payload(monkeypatch):
     class FakeStreamer:
+
         def stream_audio(self, stop_event=None):
             yield object()
 
