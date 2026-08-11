@@ -1,5 +1,6 @@
 import json
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,13 +27,24 @@ class World:
     def __init__(self, capacity: int = 100, db_path: str | None = None):
         self.memory = MemoryManager(capacity=capacity, db_path=db_path or "robot_memory.db")
         self._cache: dict[str, WorldObject] = {}
+        # Guards ``_cache`` between the detection thread (writer) and the
+        # Executor agent's servo loop (reader).
+        self._lock = threading.RLock()
 
     def update(self, frame: FrameDetection):
-        for track_id in list(self._cache.keys()):
-            obj = self._cache[track_id]
-            obj.visible = False
-            self._persist(track_id, obj)
+        """Replace the visible-object set atomically.
 
+        This runs on the detection thread while the Executor agent polls
+        ``get_visible_objects`` from another thread. Clearing visibility
+        in-place first — with a synchronous DB write per object — left a window
+        in which readers saw *nothing* visible, even though the target was in
+        frame the whole time. The Executor's servo loop treats an empty result
+        as "target lost" and aborts, so that window surfaced as spurious
+        "lost alignment or out of range" failures.
+
+        The new state is therefore built off to the side and swapped in under a
+        lock, and persistence happens outside the critical section.
+        """
         detections = None
         if hasattr(frame, "detections"):
             detections = frame.detections
@@ -41,22 +53,44 @@ class World:
         else:
             return
 
+        new_cache: dict[str, WorldObject] = {}
         for det in detections:
             if det.track_id is None:
                 continue
 
-            track_id = str(det.track_id)
-            obj = WorldObject(
+            new_cache[str(det.track_id)] = WorldObject(
                 class_name=det.class_name,
                 box=det.box,
                 last_seen_frame=det.frame_index,
                 visible=True,
             )
-            self._cache[track_id] = obj
+
+        with self._lock:
+            # Objects seen previously but not in this frame stay in memory,
+            # flagged as no longer visible.
+            for track_id, obj in self._cache.items():
+                if track_id not in new_cache:
+                    obj.visible = False
+                    new_cache[track_id] = obj
+            self._cache = new_cache
+            snapshot = list(new_cache.items())
+
+        for track_id, obj in snapshot:
             self._persist(track_id, obj)
 
     def get_visible_objects(self):
-        return [obj for obj in self._cache.values() if obj.visible]
+        with self._lock:
+            return [obj for obj in self._cache.values() if obj.visible]
+
+    def get_visible_items(self) -> dict[str, WorldObject]:
+        """Currently visible objects keyed by track id.
+
+        ``self.memory`` is a ``MemoryManager`` (the durable store), not the
+        live dictionary, so callers that need track IDs alongside objects must
+        go through here rather than iterating it.
+        """
+        with self._lock:
+            return {track_id: obj for track_id, obj in self._cache.items() if obj.visible}
 
     def get_object_by_track_id(self, track_id: int):
         key = str(track_id)

@@ -41,25 +41,33 @@ class CameraService:
         """Read a frame from either Webots robot camera or local OpenCV camera."""
         if self.use_webots and self.webots_driver and self.webots_driver.camera:
             try:
-                # Step the simulation to advance sensor data and get fresh camera frame
-                time_step = self.webots_driver.time_step
-                if self.webots_driver.robot.step(time_step) == -1:
-                    return None, None
-                
-                # Get raw image bytes from Webots camera
-                raw_image = self.webots_driver.camera.getImage()
+                # Step the simulation and grab the frame atomically — the
+                # Executor agent drives the same Robot handle from another
+                # thread, and the Webots API is not thread-safe.
+                raw_image, width, height = self.webots_driver.read_camera_image()
                 if raw_image is None or len(raw_image) == 0:
                     return None, None
-                
-                # Convert Webots raw bytes to BGR numpy array for OpenCV/YOLO
-                width = self.webots_driver.get_camera_width()
-                height = self.webots_driver.camera.getHeight()
-                
-                # Webots returns RGBA format; convert to BGR for OpenCV compatibility
-                image_array = np.frombuffer(raw_image, dtype=np.uint8).reshape((height, width, 4))
-                # Drop alpha channel and convert RGBA to BGR
-                frame = cv2.cvtColor(image_array, cv2.COLOR_RGBA2BGR)
-                
+
+                if width <= 0 or height <= 0:
+                    return None, None
+
+                expected = width * height * 4
+                if len(raw_image) < expected:
+                    # A short buffer means the frame was torn mid-read; skip it
+                    # rather than raising out of the detection loop.
+                    return None, None
+
+                # Webots' Camera.getImage() returns BGRA — "a sequence of four
+                # bytes representing the blue, green, red and alpha levels of a
+                # pixel" — NOT RGBA. Converting as RGBA swaps the red and blue
+                # channels, which silently inverts every colour in the frame:
+                # tan wood renders cyan and the orange cylinder renders blue,
+                # so no colour-based detection can ever match.
+                image_array = np.frombuffer(
+                    raw_image[:expected], dtype=np.uint8
+                ).reshape((height, width, 4))
+                frame = cv2.cvtColor(image_array, cv2.COLOR_BGRA2BGR)
+
                 return True, frame
             except (ValueError, RuntimeError) as e:
                 print(f"[CameraService] Webots camera error: {e}")
