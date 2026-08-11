@@ -1,0 +1,13 @@
+{
+  "name": "bai-demo-recorder",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Playwright capture of a full voice-command run on the BAI dashboard.",
+  "scripts": {
+    "record": "node record-demo.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48"
+  }
+}
