@@ -4,3 +4,6 @@
 [submodule "agents"]
 	path = agents
 	url = https://github.com/aparikh27/agents.git
+[submodule "edge"]
+	path = edge
+	url = https://github.com/aparikh27/edge.git
