@@ -35,6 +35,6 @@ include = ["agents*", "backend*", "rl*", "MemoryEngine*"]
 exclude = ["*.tests", "*.tests.*"]
 
 [tool.pytest.ini_options]
-testpaths = ["agents/tests", "backend/tests", "rl"]
+testpaths = ["agents/tests", "backend/tests", "rl", "tests"]
 python_files = ["test_*.py", "tests.py"]
 addopts = "-ra"
